@@ -1,0 +1,23 @@
+# PlatformIO
+firmware/.pio/
+firmware/.vscode/
+
+# ROS 2
+ros2_ws/build/
+ros2_ws/install/
+ros2_ws/log/
+
+# Python
+__pycache__/
+*.pyc
+.venv/
+
+# Data (rosbags, CSV logs) — keep out of git
+data/
+*.db3
+*.mcap
+
+# OS / editors
+.DS_Store
+.idea/
+*.swp
