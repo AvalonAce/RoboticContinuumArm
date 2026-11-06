@@ -95,6 +95,11 @@ class RCM:
         self._run = True
         self._rx_bytes = 0
         self._recent: list[str] = []          # last non-telemetry lines, for error messages
+        self.bad_lines = 0                     # corrupted / failed-checksum telemetry lines dropped
+        self.link_error: str | None = None     # set if the reader thread stops (port gone, etc.)
+        self.last_rx = time.monotonic()
+        self.trip_samples = 3                  # consecutive over-limit samples before a load trip
+        self._over: dict[int, int] = {}
 
         # Opening the port pulses DTR/RTS -> the board's auto-reset circuit reboots the ESP32.
         # We embrace that: it guarantees a known state, and the boot banner tells us the IDs.
@@ -125,7 +130,7 @@ class RCM:
                 msg = self._msgs.get(timeout=left)
             except queue.Empty:
                 break
-            if msg.startswith(prefix):
+            if prefix in msg:                  # tolerate a corrupted fragment glued in front
                 return msg
         return None
 
@@ -149,39 +154,81 @@ class RCM:
         while self._run:
             try:
                 chunk = self.ser.read(256)
-            except (serial.SerialException, OSError, TypeError):
-                break
+            except Exception as e:  # noqa: BLE001 — port vanished, multiple access, ...
+                if self._run:
+                    self.link_error = f"serial read failed: {e!r}"
+                return
             if not chunk:
                 continue
             buf += chunk
             self._rx_bytes += len(chunk)
+            self.last_rx = time.monotonic()
             while b"\n" in buf:
                 raw, buf = buf.split(b"\n", 1)
-                self._handle(raw.decode(errors="replace").strip())
+                try:
+                    self._handle(raw.decode(errors="replace").strip())
+                except Exception:  # noqa: BLE001 — one bad line must never kill the reader
+                    self.bad_lines += 1
+
+    @staticmethod
+    def _verify(line: str) -> str | None:
+        """Strip and check '*HH' checksum. Lines without one (older firmware) pass through."""
+        if "*" not in line:
+            return line
+        body, _, cs = line.rpartition("*")
+        x = 0
+        for ch in body.encode(errors="replace"):
+            x ^= ch
+        try:
+            return body if int(cs, 16) == x else None
+        except ValueError:
+            return None
+
+    @staticmethod
+    def _plausible(v: list[int]) -> bool:
+        _, sid, pos, spd, load, volt, temp, cur, mov = v
+        return (0 <= sid <= 253 and 0 <= pos <= 4095 and abs(spd) <= 10000 and abs(load) <= 1000
+                and 0 <= volt <= 200 and -10 <= temp <= 120 and mov in (0, 1))
 
     def _handle(self, line: str) -> None:
         if not line:
             return
-        parts = line.split(",")
-        if parts[0].isdigit() and len(parts) >= 3:       # telemetry row
-            sid = int(parts[1])
+        if line[0].isdigit() and line.count(",") >= 2:   # telemetry row
+            body = self._verify(line)
+            if body is None:
+                self.bad_lines += 1
+                return
+            parts = body.split(",")
             now = time.monotonic()
+            if len(parts) == 3 and parts[2] == "ERR":
+                sid = int(parts[1])
+                with self._slock:
+                    s = self.state.setdefault(sid, ServoState(sid))
+                    s.err, s.host_t = True, now
+                return
+            if len(parts) != len(FIELDS):
+                self.bad_lines += 1
+                return
+            v = [int(x) for x in parts]                    # ValueError -> counted by caller
+            if not self._plausible(v):
+                self.bad_lines += 1
+                return
+            sid = v[1]
             with self._slock:
                 s = self.state.setdefault(sid, ServoState(sid))
-                if parts[2] == "ERR":
-                    s.err, s.host_t = True, now
-                elif len(parts) == len(FIELDS):
-                    v = list(map(int, parts))
-                    (s.t_ms, _, s.pos, s.speed, s.load, s.volt_dV,
-                     s.temp_C, s.current, s.moving) = v
-                    s.err, s.host_t = False, now
-                    if self._rec and (self._rec.ids is None or sid in self._rec.ids):
-                        self._rec.fh.write(f"{now:.4f},{line}\n")
-                        self._rec.rows += 1
-                    if (self.load_limit is not None and abs(s.load) > self.load_limit
-                            and not self._tripped):
-                        self._tripped = f"servo {sid} load {s.load} > {self.load_limit}"
-                        self.send("stop")
+                (s.t_ms, _, s.pos, s.speed, s.load, s.volt_dV, s.temp_C, s.current, s.moving) = v
+                s.err, s.host_t = False, now
+                if self._rec and (self._rec.ids is None or sid in self._rec.ids):
+                    self._rec.fh.write(f"{now:.4f},{body}\n")
+                    self._rec.rows += 1
+            # load trip only after N consecutive over-limit samples (one glitch != a stall)
+            if self.load_limit is not None and abs(v[4]) > self.load_limit:
+                self._over[sid] = self._over.get(sid, 0) + 1
+                if self._over[sid] >= self.trip_samples and not self._tripped:
+                    self._tripped = f"servo {sid} load {v[4]} > {self.load_limit}"
+                    self.send("stop")
+            else:
+                self._over[sid] = 0
             return
         if line.startswith("t_ms,"):                     # stream header
             return
@@ -199,7 +246,13 @@ class RCM:
         # "found 3: 1 2 3"
         return [int(x) for x in line.split(":", 1)[1].split()] if ":" in line else []
 
+    @property
+    def link_ok(self) -> bool:
+        return self.link_error is None and self._rx.is_alive()
+
     def diag(self) -> str:
+        if self.link_error or not self._rx.is_alive():
+            return f"serial link down: {self.link_error or 'reader stopped'}"
         if self._rx_bytes == 0:
             return (f"received 0 bytes from {self.port}: board not running our firmware, "
                     "or another program (serial console?) is reading the port")
@@ -314,7 +367,10 @@ class RCM:
         time.sleep(0.05)
         self._run = False
         self._rx.join(timeout=0.5)
-        self.ser.close()
+        try:
+            self.ser.close()
+        except Exception:  # noqa: BLE001
+            pass
 
     def __enter__(self):
         return self

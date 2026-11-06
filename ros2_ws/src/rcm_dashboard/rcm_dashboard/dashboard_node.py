@@ -20,7 +20,7 @@ from pathlib import Path
 import rclpy
 from ament_index_python.packages import get_package_share_directory
 from rclpy.callback_groups import ReentrantCallbackGroup
-from rclpy.executors import MultiThreadedExecutor
+from rclpy.executors import SingleThreadedExecutor
 from rclpy.node import Node
 from rclpy.qos import DurabilityPolicy, QoSProfile
 from std_msgs.msg import String
@@ -205,7 +205,7 @@ def make_handler(node: Dashboard):
 def main(args=None):
     rclpy.init(args=args)
     node = Dashboard()
-    ex = MultiThreadedExecutor(num_threads=4)
+    ex = SingleThreadedExecutor()      # HTTP threads wait on futures; executor just services ROS
     ex.add_node(node)
     threading.Thread(target=ex.spin, daemon=True).start()
     try:

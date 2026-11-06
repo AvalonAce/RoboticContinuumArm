@@ -26,7 +26,7 @@ import rclpy
 import yaml
 from ament_index_python.packages import get_package_share_directory
 from rclpy.callback_groups import ReentrantCallbackGroup
-from rclpy.executors import MultiThreadedExecutor
+from rclpy.executors import SingleThreadedExecutor
 from rclpy.node import Node
 from rclpy.qos import DurabilityPolicy, QoSProfile
 from std_msgs.msg import String
@@ -49,6 +49,8 @@ def safe(fn):
         try:
             return fn(self, *a)
         except Exception as e:  # noqa: BLE001
+            if getattr(self, "closing", False) or type(e).__name__ == "InvalidHandle":
+                return None                     # node shutting down: publishers already destroyed
             tb = traceback.format_exc()
             self.get_logger().error(f"{fn.__name__} crashed: {e!r}\n{tb}")
             try:
@@ -408,13 +410,14 @@ class Runner(Node):
 def main(args=None):
     rclpy.init(args=args)
     node = Runner()
-    ex = MultiThreadedExecutor(num_threads=6)
+    ex = SingleThreadedExecutor()      # protocols run in their own thread; callbacks are short
     ex.add_node(node)
     try:
         ex.spin()
     except KeyboardInterrupt:
         pass
     finally:
+        node.closing = True
         node.abort_flag.set()
         node.close_session()
         node.destroy_node()

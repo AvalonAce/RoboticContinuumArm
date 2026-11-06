@@ -41,9 +41,17 @@ static void doScan() {
   Serial.println();
 }
 
+// Telemetry lines carry "*HH" = XOR of all chars before '*', so the host can drop corrupted lines
+static void printChecked(const char *body) {
+  uint8_t x = 0;
+  for (const char *c = body; *c; c++) x ^= (uint8_t)*c;
+  Serial.printf("%s*%02X\n", body, x);
+}
+
 static void printState(int id, bool csv) {
+  char buf[96];
   if (st.FeedBack(id) == -1) {
-    if (csv) Serial.printf("%lu,%d,ERR\n", millis(), id);
+    if (csv) { snprintf(buf, sizeof(buf), "%lu,%d,ERR", millis(), id); printChecked(buf); }
     else Serial.printf("id %d: no response\n", id);
     return;
   }
@@ -52,7 +60,8 @@ static void printState(int id, bool csv) {
   int mov = st.ReadMove(-1);
   if (csv) {
     // t_ms,id,pos,speed,load,volt_dV,temp_C,current,moving
-    Serial.printf("%lu,%d,%d,%d,%d,%d,%d,%d,%d\n", millis(), id, pos, spd, load, volt, temp, cur, mov);
+    snprintf(buf, sizeof(buf), "%lu,%d,%d,%d,%d,%d,%d,%d,%d", millis(), id, pos, spd, load, volt, temp, cur, mov);
+    printChecked(buf);
   } else {
     Serial.printf("id %d: pos=%d spd=%d load=%d volt=%.1fV temp=%dC cur=%d moving=%d\n",
                   id, pos, spd, load, volt / 10.0f, temp, cur, mov);

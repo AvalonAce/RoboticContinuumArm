@@ -34,6 +34,8 @@ Edits to `config/arm.yaml` and `protocols/*.yaml` in the source tree take effect
 | Load limit (`load_limit`) / temperature limit | same as e-stop, automatic. Reason shown in the dashboard. |
 | **Abort** (test panel) | protocol stops; **arm holds its current pose** (torque stays on). |
 | Soft limits (`soft_min/max`) | every goal clamped per servo. Tighten once winch travel is known. |
+| Serial link lost (no bytes 1.5 s / reader error) | trip + notice; bridge reconnects automatically (board resets → limp); Rearm when restored. |
+| Corrupted serial lines | dropped (firmware `*HH` checksum + range checks), counted in a notice every 5 s. Temperature must exceed the limit for 1 s, load for 3 consecutive samples, before tripping. |
 | Node shutdown (Ctrl+C) | torque off. |
 | Rearm | clears the trip; servos stay limp until the next command (which moves at commanded speed). |
 

@@ -23,6 +23,13 @@ import tty
 
 class FakeBoard:
     def __init__(self, ids=(1, 2, 3), reel_in_sign=None, stiffness=0.6, seed=0):
+        # Fault injection for testing (env RCM_SIM_FAULTS="corrupt=0.02,dropout=20:3"):
+        #   corrupt=p    each telemetry line has probability p of a byte dropped/flipped
+        #   dropout=t:d  at t s after start, go silent for d s (simulates a dead USB link)
+        f = dict(kv.split("=", 1) for kv in os.environ.get("RCM_SIM_FAULTS", "").split(",") if "=" in kv)
+        self.corrupt = float(f.get("corrupt", 0))
+        self.dropout = tuple(map(float, f["dropout"].split(":"))) if "dropout" in f else None
+        self.t_start = time.monotonic()
         rnd = random.Random(seed)
         self.ids = list(ids)
         sign = reel_in_sign or {i: 1 for i in self.ids}
@@ -40,7 +47,25 @@ class FakeBoard:
         self.port = os.ttyname(self.slave)
 
     # -- helpers --
+    def _silent(self) -> bool:
+        if not self.dropout:
+            return False
+        t = time.monotonic() - self.t_start
+        return self.dropout[0] <= t < self.dropout[0] + self.dropout[1]
+
+    def _tel(self, body: str) -> None:
+        x = 0
+        for ch in body.encode():
+            x ^= ch
+        line = f"{body}*{x:02X}"
+        if self.corrupt and random.random() < self.corrupt:
+            k = random.randrange(len(line))
+            line = line[:k] + line[k + 1:] if random.random() < 0.5 else line[:k] + "7" + line[k + 1:]
+        self._out(line)
+
     def _out(self, line: str) -> None:
+        if self._silent():
+            return
         try:
             os.write(self.master, (line + "\n").encode())
         except OSError:
@@ -80,7 +105,7 @@ class FakeBoard:
                     for i, s in self.srv.items():
                         mv = int(s["goal"] is not None and s["torque"] and abs(s["goal"] - s["pos"]) > 0.5)
                         ld = self._load(s)
-                        self._out(f"{int(now * 1000)},{i},{round(s['pos'])},{int(s['spd']) if mv else 0},"
+                        self._tel(f"{int(now * 1000)},{i},{round(s['pos'])},{int(s['spd']) if mv else 0},"
                                   f"{ld},{volt},{int(s['temp'])},{abs(ld) // 2},{mv}")
 
     def _console(self) -> None:
