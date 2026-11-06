@@ -8,6 +8,7 @@
 //   zero <id>                 set current position as center (2048)
 //   torque <id> <0|1>         disable / enable torque
 //   pos <id> <0-4095> [spd] [acc]   move to raw position
+//   sync <spd> <acc> <id> <pos> [<id> <pos>...]  simultaneous move (SyncWrite)
 //   read <id>                 pos, speed, load, voltage, temp, current, moving
 //   stream <id|all> <hz>      continuous CSV telemetry, `stream off` to stop
 //   stop                      torque off on all scanned IDs (soft e-stop)
@@ -42,7 +43,8 @@ static void doScan() {
 
 static void printState(int id, bool csv) {
   if (st.FeedBack(id) == -1) {
-    Serial.printf(csv ? "%lu,%d,ERR\n" : "id %d: no response\n", csv ? millis() : id, id);
+    if (csv) Serial.printf("%lu,%d,ERR\n", millis(), id);
+    else Serial.printf("id %d: no response\n", id);
     return;
   }
   int pos = st.ReadPos(-1), spd = st.ReadSpeed(-1), load = st.ReadLoad(-1);
@@ -80,7 +82,7 @@ static void handleLine(String line) {
   String s(cmd);
 
   if (s == "help") {
-    Serial.println("scan | baudscan | setid o n | zero id | torque id 0/1 | pos id p [spd] [acc] | read id | stream id|all hz | stream off | stop");
+    Serial.println("scan | baudscan | setid o n | zero id | torque id 0/1 | pos id p [spd] [acc] | sync spd acc id p [id p..] | read id | stream id|all hz | stream off | stop");
   } else if (s == "scan") {
     doScan();
   } else if (s == "baudscan") {
@@ -106,6 +108,20 @@ static void handleLine(String line) {
     b = constrain(b, 0, 4095);
     st.WritePosEx(a, b, spd, acc);
     Serial.printf("move %d -> %d (spd %d acc %d)\n", a, b, spd, acc);
+  } else if (s == "sync" && n >= 5) {
+    // sync <spd> <acc> <id> <pos> [<id> <pos> ...]  — one SyncWrite packet, all start together
+    static const int MAXN = 8;
+    u8 ids[MAXN]; s16 ps[MAXN]; u16 sp[MAXN]; u8 ac[MAXN];
+    char tmp[128]; line.toCharArray(tmp, sizeof(tmp));
+    strtok(tmp, " ");                                   // "sync"
+    int spd = atoi(strtok(NULL, " ")), acc = atoi(strtok(NULL, " "));
+    int k = 0; char *ti, *tp;
+    while (k < MAXN && (ti = strtok(NULL, " ")) && (tp = strtok(NULL, " "))) {
+      ids[k] = atoi(ti); ps[k] = constrain(atoi(tp), 0, 4095); sp[k] = spd; ac[k] = acc; k++;
+    }
+    if (k == 0) { Serial.println("ERR: sync spd acc id pos [id pos ...]"); return; }
+    st.SyncWritePosEx(ids, k, ps, sp, ac);
+    Serial.printf("sync %d servos (spd %d acc %d)\n", k, spd, acc);
   } else if (s == "read" && n >= 2) {
     printState(a, false);
   } else if (s == "stream") {

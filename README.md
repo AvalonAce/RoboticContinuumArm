@@ -37,9 +37,9 @@ See `docs/motor_bringup.md`.
 ```bash
 source boot.sh      # every new terminal; or add to ~/.bashrc:
                     #   source ~/development/RoboticContinuumArm/boot.sh
-rcm help            # build | flash | console | log | up | port | cd | ws_build | status | reload
+rcm help            # build | flash | console | log | up | port | cd | ws_build | motortest | py | status | reload
 ```
-Modules live in `scripts/boot.d/` and load in filename order (`00-paths`, `10-ros`, `20-serial`, `30-firmware`).
+Modules live in `scripts/boot.d/` and load in filename order (`00-paths`, `10-ros`, `20-serial`, `30-firmware`, `40-tools`).
 To add one, create `scripts/boot.d/NN-name.sh`:
 ```bash
 rcm_section "name"
@@ -48,3 +48,19 @@ rcm_cmd_foo() { echo "does foo $*"; }
 rcm_register foo "one-line description"   # -> `rcm foo`
 ```
 Then `rcm reload`. Modules are sourced, so never `exit` or `set -e` in them; use `return`.
+
+## Python host tools (`tools/`)
+`rcm_serial.py` drives the firmware console from Python; telemetry is parsed in a background thread.
+```python
+from rcm_serial import RCM            # PYTHONPATH set by boot.sh
+with RCM(hz=50, load_limit=900) as arm:      # opening the port reboots the ESP32 (auto-reset)
+    arm.move({1: 2400, 2: 1800, 3: 2048})    # simultaneous (firmware `sync` → SyncWrite)
+    arm.wait_until_stopped()
+    with arm.record("data/trial.csv"):
+        ...
+# exiting the block / Ctrl+C / exception → torque off
+```
+- `rcm motortest` — bus self-test (tendons detached). Exit code 0 = pass.
+- `rcm py` — interactive shell with `arm` connected.
+- Keep stream ≤ 50 Hz with 3 servos: the USB link is 115200 baud.
+- Only one program can hold the port: close `rcm console` before running Python.
