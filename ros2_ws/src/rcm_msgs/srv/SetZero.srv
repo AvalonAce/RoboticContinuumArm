@@ -1,0 +1,6 @@
+# Store calibration zero (straight, pretensioned pose) per tendon servo
+int32[] ids
+int32[] counts
+---
+bool success
+string message

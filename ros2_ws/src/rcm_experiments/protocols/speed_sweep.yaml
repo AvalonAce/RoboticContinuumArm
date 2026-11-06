@@ -1,0 +1,10 @@
+protocol: speed_sweep
+description: Lift at several servo speeds (overshoot, settling, dynamics).
+params:
+  payload_g: 100
+  speeds: [100, 200, 400, 800]
+  reps: 3
+  theta_low: 0
+  theta_high: 45
+  phi: 0
+  dwell_s: 2.0

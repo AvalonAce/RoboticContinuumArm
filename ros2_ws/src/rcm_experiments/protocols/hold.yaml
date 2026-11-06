@@ -1,0 +1,8 @@
+protocol: hold
+description: 3-minute sustained hold (creep, load drift, temperature).
+params:
+  payload_g: 100
+  theta: 45
+  phi: 0
+  duration_s: 180
+  report_every_s: 15

@@ -1,0 +1,7 @@
+string protocol        # protocol file stem in rcm_experiments/protocols (e.g. "lift_cycles")
+string overrides_yaml  # optional YAML mapping merged over the file's params
+string notes
+---
+bool success
+string message
+string session_dir

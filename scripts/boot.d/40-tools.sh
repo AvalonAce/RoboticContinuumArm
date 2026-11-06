@@ -21,6 +21,12 @@ rcm_cmd_motortest() {
 }
 rcm_register motortest "bus/servo self-test, tendons detached (--ids 1 2 3 --amp 30)"
 
+rcm_cmd_rest() {
+  if _rcm_port_busy; then echo "port busy — use the dashboard's Go to rest, or stop the stack first"; return 1; fi
+  python3 "${RCM_TOOLS}/rest.py" "$@"
+}
+rcm_register rest "move servos to winding rest pose and hold (no ROS needed)"
+
 rcm_cmd_py() {
   if _rcm_port_busy; then echo "port busy — close the serial console first"; return 1; fi
   python3 -i -c "from rcm_serial import *; arm = RCM(verbose=True); print('arm ready: ids', arm.ids, '| arm.close() when done')"

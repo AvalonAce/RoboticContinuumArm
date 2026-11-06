@@ -1,0 +1,5 @@
+# Answer the runner's current operator prompt
+string value
+---
+bool success
+string message

@@ -1,0 +1,86 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>RCM Control</title>
+<link rel="stylesheet" href="uPlot.min.css">
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<header>
+  <div class="brand">RCM</div>
+  <div class="chips">
+    <span id="c-link" class="chip">link</span>
+    <span id="c-bridge" class="chip">bridge</span>
+    <span id="c-cal" class="chip">calibration</span>
+  </div>
+  <button id="b-rearm" class="btn hidden">Rearm</button>
+  <button id="b-estop" class="btn estop" title="Esc">E-STOP</button>
+</header>
+
+<main id="main">
+  <section class="card">
+    <h2>Setup</h2>
+    <div class="row btns">
+      <button id="b-rest" class="btn" title="Move slowly to the winding pose and hold">Go to rest</button>
+      <button id="b-cal" class="btn">Calibrate</button>
+    </div>
+    <p class="small muted">Before winding: Go to rest (servos hold) → wind tendons with slight slack, tie off → Calibrate.</p>
+  </section>
+
+  <section class="card">
+    <h2>Move</h2>
+    <label class="row">θ <input id="theta" type="range" min="0" max="90" step="1" value="0"><output id="o-theta">0°</output></label>
+    <label class="row">φ <input id="phi" type="range" min="-180" max="180" step="5" value="0"><output id="o-phi">0°</output></label>
+    <div class="row btns">
+      <button id="b-send" class="btn primary">Send</button>
+      <button id="b-straight" class="btn">Straight</button>
+      <span id="estimate" class="small muted mono"></span>
+    </div>
+  </section>
+
+  <section class="card">
+    <h2>Test</h2>
+    <div class="row">
+      <select id="proto"></select>
+      <button id="b-start" class="btn primary">Start</button>
+      <button id="b-abort" class="btn warn" title="Stops the test; arm holds position">Abort</button>
+    </div>
+    <div class="row"><span id="t-state" class="chip">idle</span><span id="t-elapsed" class="small muted"></span></div>
+    <div id="prompt" class="prompt hidden">
+      <div id="prompt-text"></div>
+      <div class="row"><input id="prompt-in" type="text"><button id="b-answer" class="btn primary">Continue ⏎</button></div>
+    </div>
+    <pre id="t-log"></pre>
+  </section>
+
+  <section class="card">
+    <h2>Tendon load</h2>
+    <div id="p-load"></div>
+  </section>
+
+  <details class="card" id="adv">
+    <summary>Advanced</summary>
+    <h3>Servos</h3>
+    <table id="servos"><thead><tr>
+      <th>ID</th><th>pos</th><th>goal</th><th>err</th><th>load</th><th>°C</th><th>V</th><th></th>
+    </tr></thead><tbody></tbody></table>
+    <h3>Raw jog <small>bypasses kinematics; use to find reel_in_sign</small></h3>
+    <div id="jog"></div>
+    <div class="row"><label class="row">speed <input id="speed" type="number" min="20" max="3000" step="10" value="200"></label>
+      <button id="b-limp" class="btn warn">Torque off</button></div>
+    <h3>Test parameters <small>YAML, overrides the protocol file for this run</small></h3>
+    <p id="proto-desc" class="small muted"></p>
+    <textarea id="params" spellcheck="false" rows="8"></textarea>
+    <input id="notes" type="text" placeholder="run notes">
+    <div id="t-session" class="small mono muted"></div>
+    <h3>Position error <small>pos − goal</small></h3><div id="p-err"></div>
+    <h3>Bend θ <small>estimate vs command</small></h3><div id="p-theta"></div>
+  </details>
+</main>
+<div id="toast"></div>
+<script src="uPlot.iife.min.js"></script>
+<script src="app.js"></script>
+</body>
+</html>

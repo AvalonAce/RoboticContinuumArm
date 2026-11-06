@@ -44,8 +44,9 @@ stop
 - `load` is signed and roughly ‰ of max torque; this is the tendon-tension proxy. Record the no-load baseline now.
 - `volt` in decivolts. Check it matches the PSU under motion.
 
-## 5. Zeroing (after winches are mounted)
-With tendons slack-but-taut at the arm's straight pose: `zero <id>` sets that position as 2048. Stored in EEPROM.
+## 5. Winding + calibration (after winches are mounted)
+Don't use the console's `zero` (EEPROM) for this. Follow `docs/software.md` → *Tendon setup*:
+`rcm rest` (hold at rest pose) → wind with slight slack → dashboard *Calibrate*.
 
 ## Known limits for winch use
 Position mode covers **one revolution** (0–4095). If a tendon needs more spool travel than one rev of the winch, we need multi-turn (step) mode. Decide once spool diameter and tendon stroke are known: stroke ≤ π·d_spool fits position mode.

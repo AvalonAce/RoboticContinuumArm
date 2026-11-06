@@ -1,0 +1,7 @@
+protocol: limit
+description: Increase payload until failure; document the failure mode (operating envelope).
+params:
+  theta: 45
+  phi: 0
+  payloads_g: [50, 100, 150, 200, 300, 400, 500]
+  hold_s: 10.0

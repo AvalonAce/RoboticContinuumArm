@@ -135,8 +135,7 @@ static void handleLine(String line) {
   } else if (s == "stop") {
     if (nFound == 0) doScan();
     for (int i = 0; i < nFound; i++) st.EnableTorque(foundIds[i], 0);
-    streamId = -2;
-    Serial.println("all torque off");
+    Serial.println("all torque off");   // telemetry keeps streaming (see the arm after e-stop)
   } else {
     Serial.printf("? [%s] (type help)\n", line.c_str());
   }
@@ -146,6 +145,7 @@ void setup() {
   Serial.begin(115200);
   Serial1.begin(BUS_BAUD, SERIAL_8N1, S_RXD, S_TXD);
   st.pSerial = &Serial1;
+  st.IOTimeOut = 10;   // ms; lib default 100 → every absent ID stalled scans/stream by 100 ms
   delay(500);
   Serial.println("\nRCM bring-up console v0. type `help`");
   doScan();

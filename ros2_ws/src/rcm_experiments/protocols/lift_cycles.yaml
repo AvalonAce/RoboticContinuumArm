@@ -1,0 +1,10 @@
+protocol: lift_cycles
+description: 10 repeated lifts at a sub-limit payload (repeatability, drift).
+params:
+  payload_g: 100
+  theta_low: 0
+  theta_high: 45
+  phi: 0
+  cycles: 10
+  speed: 300
+  dwell_s: 2.0

@@ -1,0 +1,11 @@
+protocol: static_load
+description: Incremental static loading at fixed configurations (deflection/load vs payload).
+params:
+  configs:
+    - {theta: 0, phi: 0}
+    - {theta: 30, phi: 0}
+    - {theta: 60, phi: 0}
+  payloads_g: [0, 50, 100, 150, 200]
+  settle_s: 3.0
+  hold_s: 5.0
+  speed: 200

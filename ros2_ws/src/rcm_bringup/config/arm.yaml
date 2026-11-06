@@ -1,0 +1,37 @@
+# RCM arm configuration. Values marked PLACEHOLDER must be measured on the real build.
+hw_bridge:
+  ros__parameters:
+    port: ""              # "" = auto-detect (RCM_PORT, /dev/serial/by-id/*CP210*, ttyUSB*)
+    hz: 50                # telemetry rate; keep <= 50 with 3 servos (115200-baud USB link)
+    ids: [1, 2, 3]
+    load_limit: 900       # |load| above this -> torque off (trip). Lower once you know real tension levels
+    temp_limit: 60        # degC
+    default_speed: 400
+    default_acc: 30
+    soft_min: [300, 300, 300]     # PLACEHOLDER: tighten to winch travel once tendons are on
+    soft_max: [3800, 3800, 3800]
+
+kinematics:
+  ros__parameters:
+    length_mm: 200.0          # PLACEHOLDER  section length L
+    tendon_radius_mm: 15.0    # PLACEHOLDER  backbone axis -> tendon routing hole
+    spool_radius_mm: 10.0     # PLACEHOLDER  winch spool radius (to tendon centerline)
+    ids: [1, 2, 3]
+    angles_deg: [0.0, 120.0, 240.0]   # tendon i angular position around backbone
+    reel_in_sign: [1, 1, 1]   # PLACEHOLDER  +1 if increasing counts SHORTENS that tendon
+    takeup_mm: 0.0            # extra common-mode reel-in (pretension trim)
+    theta_max_deg: 90.0
+    pretension_allowance_mm: 3.0   # expected reel-in from "slight slack" to taut; shifts the rest pose
+    rest_counts: [-1, -1, -1]      # winding rest pose per servo; -1 = auto (center, offset by allowance)
+    rest_speed: 150
+    calibration_file: ""      # "" = $RCM_ROOT/config/calibration.yaml
+
+test_runner:
+  ros__parameters:
+    data_dir: ""              # "" = $RCM_DATA or $RCM_ROOT/data
+    protocols_dir: ""         # "" = source tree protocols/ (live-editable)
+
+dashboard:
+  ros__parameters:
+    host: "127.0.0.1"         # 0.0.0.0 to let teammates connect over the LAN
+    port: 8080

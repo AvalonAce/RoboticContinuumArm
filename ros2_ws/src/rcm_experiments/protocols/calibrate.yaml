@@ -1,0 +1,10 @@
+protocol: calibrate
+description: >
+  Pretension all three tendons together until each reaches load_threshold above idle,
+  then store that straight pose as the calibration zero. Run first, and after any
+  re-tensioning or winch change.
+params:
+  step_counts: 6          # reel-in per step (~0.09 mm at r=10 mm)
+  load_threshold: 60      # |load| rise above idle that counts as "taut"
+  max_travel_counts: 1200 # abort if a tendon hasn't gone taut by then
+  speed: 150
