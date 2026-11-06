@@ -6,6 +6,7 @@ Srv  /rcm/set_zero       rcm_msgs/SetZero      store calibration zeros (writes c
 Srv  /rcm/kinematics/reload  std_srvs/Trigger  re-read calibration_file
 Srv  /rcm/rest           std_srvs/Trigger      move all servos (slowly) to the winding rest pose and hold
 Pub  /rcm/kinematics/info    std_msgs/String   JSON geometry + calibration (latched)
+Pub  /rcm/notice             std_msgs/String   operator-visible warnings (rejected commands)
 """
 from __future__ import annotations
 
@@ -57,6 +58,7 @@ class Kinematics(Node):
         self.est_pub = self.create_publisher(BendState, "/rcm/bend_estimate", 10)
         latched = QoSProfile(depth=1, durability=DurabilityPolicy.TRANSIENT_LOCAL)
         self.info_pub = self.create_publisher(String, "/rcm/kinematics/info", latched)
+        self.notice_pub = self.create_publisher(String, "/rcm/notice", 10)
         self.create_subscription(BendCommand, "/rcm/cmd_bend", self.on_cmd, 10)
         self.create_subscription(ArmState, "/rcm/state", self.on_state, 10)
         self.create_service(SetZero, "/rcm/set_zero", self.on_set_zero)
@@ -98,6 +100,7 @@ class Kinematics(Node):
             counts = bend_to_counts(self.g, msg.theta, msg.phi)
         except OutOfRange as e:
             self.get_logger().error(f"bend command rejected: {e}")
+            self.notice_pub.publish(String(data=f"kinematics: move rejected — {e}"))
             return
         self.cmd = (msg.theta, msg.phi)
         self.goal_pub.publish(TendonGoal(ids=self.g.ids, positions=counts, speed=msg.speed, acc=msg.acc))

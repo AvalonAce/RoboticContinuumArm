@@ -5,6 +5,7 @@ Sub  /rcm/goal    rcm_msgs/TendonGoal    (raw counts; clamped to soft limits; on
 Srv  /rcm/torque  rcm_msgs/SetTorque     (id 0 = all)
 Srv  /rcm/estop   std_srvs/Trigger       (torque off + block goals)
 Srv  /rcm/rearm   std_srvs/Trigger       (clear trip; servos stay limp until next goal)
+Pub  /rcm/notice  std_msgs/String        operator-visible warnings (ignored/clamped goals)
 
 Safety: load limit (|load| > load_limit -> torque off), temperature limit, soft position
 limits per servo. Any trip blocks goals until /rcm/rearm. Shutdown -> torque off.
@@ -17,6 +18,7 @@ import rclpy
 from rclpy.callback_groups import MutuallyExclusiveCallbackGroup
 from rclpy.executors import MultiThreadedExecutor
 from rclpy.node import Node
+from std_msgs.msg import String
 from std_srvs.srv import Trigger
 
 from rcm_msgs.msg import ArmState, ServoState, TendonGoal
@@ -63,6 +65,8 @@ class HwBridge(Node):
 
         cmd_group = MutuallyExclusiveCallbackGroup()   # serial commands are serialized
         self.pub = self.create_publisher(ArmState, "/rcm/state", 10)
+        self.notice_pub = self.create_publisher(String, "/rcm/notice", 10)
+        self._last_notice = (0.0, "")
         self.create_subscription(TendonGoal, "/rcm/goal", self.on_goal, 10, callback_group=cmd_group)
         self.create_service(SetTorque, "/rcm/torque", self.on_torque, callback_group=cmd_group)
         self.create_service(Trigger, "/rcm/estop", self.on_estop)
@@ -72,8 +76,7 @@ class HwBridge(Node):
     # ---------------- callbacks ----------------
     def on_goal(self, msg: TendonGoal) -> None:
         if self.arm.tripped:
-            self.get_logger().warn(f"goal ignored: tripped ({self.arm.tripped}) — call /rcm/rearm",
-                                   throttle_duration_sec=2.0)
+            self.notice(f"move ignored: bridge tripped ({self.arm.tripped}) — press Rearm")
             return
         if len(msg.ids) != len(msg.positions) or not msg.ids:
             self.get_logger().error("bad goal: ids/positions length mismatch")
@@ -86,8 +89,7 @@ class HwBridge(Node):
             lo, hi = self.limits[i]
             c = max(lo, min(hi, int(pos)))
             if c != pos:
-                self.get_logger().warn(f"servo {i} goal {pos} clamped to {c} (soft limit)",
-                                       throttle_duration_sec=1.0)
+                self.notice(f"servo {i} goal {pos} clamped to {c} (soft limit)")
             targets[i] = c
         if not targets:
             return
@@ -95,7 +97,16 @@ class HwBridge(Node):
             self.arm.move(targets, speed=msg.speed or self.default_speed, acc=msg.acc or self.default_acc)
             self.torque_on = True
         except RCMError as e:
-            self.get_logger().error(f"move failed: {e}")
+            self.notice(f"move failed: {e}")
+
+    def notice(self, text: str) -> None:
+        """Log + publish for the dashboard; identical notices throttled to 1 per 2 s."""
+        now = time.monotonic()
+        if text == self._last_notice[1] and now - self._last_notice[0] < 2.0:
+            return
+        self._last_notice = (now, text)
+        self.get_logger().warn(text)
+        self.notice_pub.publish(String(data=f"hw_bridge: {text}"))
 
     def on_torque(self, req: SetTorque.Request, res: SetTorque.Response):
         ids = self.ids if req.id == 0 else [req.id]
@@ -144,6 +155,7 @@ class HwBridge(Node):
         if self.arm.tripped:
             self.torque_on = False
         msg.torque_enabled = self.torque_on
+        msg.simulated = bool(self.sim)
         msg.tripped = self.arm.tripped or ""
         self.pub.publish(msg)
 

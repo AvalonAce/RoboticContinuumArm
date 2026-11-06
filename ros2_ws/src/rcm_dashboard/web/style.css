@@ -67,3 +67,4 @@ details.card > summary { font-size: 14px; color: var(--text); font-weight: 600; 
 header .btn { flex: none; }
 pre#t-log { height: 120px; }
 #estimate { margin-left: auto; }
+.btn:disabled { opacity: .45; cursor: not-allowed; filter: none; }

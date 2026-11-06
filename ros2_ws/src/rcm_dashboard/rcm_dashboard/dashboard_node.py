@@ -45,6 +45,8 @@ class Dashboard(Node):
         self.test: dict = {}
         self.info: dict = {}
         self.seq = 0
+        self.notices: list[dict] = []          # [{"n": counter, "text": ...}], last 20
+        self.notice_n = 0
 
         cg = ReentrantCallbackGroup()
         latched = QoSProfile(depth=1, durability=DurabilityPolicy.TRANSIENT_LOCAL)
@@ -52,6 +54,7 @@ class Dashboard(Node):
         self.create_subscription(BendState, "/rcm/bend_estimate", self.on_bend, 10, callback_group=cg)
         self.create_subscription(String, "/rcm/test/status", self.on_test, 10, callback_group=cg)
         self.create_subscription(String, "/rcm/kinematics/info", self.on_info, latched, callback_group=cg)
+        self.create_subscription(String, "/rcm/notice", self.on_notice, 20, callback_group=cg)
         self.bend_pub = self.create_publisher(BendCommand, "/rcm/cmd_bend", 10)
         self.goal_pub = self.create_publisher(TendonGoal, "/rcm/goal", 10)
         c = lambda t, n: self.create_client(t, n, callback_group=cg)  # noqa: E731
@@ -66,7 +69,7 @@ class Dashboard(Node):
     # ---------------- ROS -> snapshot ----------------
     def on_state(self, m: ArmState):
         self.arm = {
-            "t": time.time(), "tripped": m.tripped, "torque": m.torque_enabled,
+            "t": time.time(), "tripped": m.tripped, "torque": m.torque_enabled, "sim": m.simulated,
             "servos": [dict(id=s.id, pos=s.pos, goal=s.goal, speed=s.speed, load=s.load, voltage=round(s.voltage, 1),
                             temperature=s.temperature, current=s.current, moving=s.moving, error=s.error)
                        for s in m.servos],
@@ -82,11 +85,15 @@ class Dashboard(Node):
     def on_test(self, m: String):
         self.test = json.loads(m.data)
 
+    def on_notice(self, m: String):
+        self.notice_n += 1
+        self.notices = (self.notices + [{"n": self.notice_n, "text": m.data}])[-20:]
+
     def on_info(self, m: String):
         self.info = json.loads(m.data)
 
     def snapshot(self, with_info: bool) -> dict:
-        d = {"arm": self.arm, "bend": self.bend, "test": self.test, "now": time.time()}
+        d = {"arm": self.arm, "bend": self.bend, "test": self.test, "now": time.time(), "notices": self.notices}
         if with_info:
             d["info"] = self.info
         return d

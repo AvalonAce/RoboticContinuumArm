@@ -8,9 +8,12 @@ let info = {}, last = null, ids = [], plots = null, lastArmT = 0;
 let buf = null;                       // plot ring buffers
 let protocols = {};
 let promptKey = null;
+let lastNotice = null;           // highest notice counter already shown
+let inflight = 0;
 
 // ---------------------------------------------------------------- api
 async function api(action, body = {}) {
+  inflight++; syncButtons();
   try {
     const r = await fetch(`/api/${action}`, { method: "POST", headers: { "Content-Type": "application/json" },
                                               body: JSON.stringify(body) });
@@ -18,6 +21,14 @@ async function api(action, body = {}) {
     if (!j.ok) toast(`${action}: ${j.message}`, true);
     return j;
   } catch (e) { toast(`${action}: ${e}`, true); return { ok: false }; }
+  finally { inflight--; syncButtons(); }
+}
+// Start/Calibrate/Rest can't be double-fired, and are locked while a test runs
+let testBusy = false;
+function syncButtons() {
+  const lock = inflight > 0 || testBusy;
+  for (const id of ["b-start", "b-cal", "b-rest"]) $(id).disabled = lock;
+  for (const id of ["b-send", "b-straight"]) $(id).disabled = testBusy;
 }
 function toast(msg, bad = false) {
   const d = document.createElement("div");
@@ -104,6 +115,8 @@ function buildJog() {
 }
 function renderTest(t) {
   if (!t || !t.state) return;
+  const busy = ["running", "prompt"].includes(t.state);
+  if (busy !== testBusy) { testBusy = busy; syncButtons(); }
   const cls = { running: "ok", prompt: "warn", done: "ok", aborted: "warn", tripped: "bad", error: "bad" }[t.state] || "";
   chip($("t-state"), t.state + (t.protocol ? ` · ${t.protocol}` : ""), cls);
   $("t-elapsed").textContent = ["running", "prompt"].includes(t.state) ? `${t.elapsed_s.toFixed(0)} s` : "";
@@ -145,6 +158,7 @@ function render(d) {
     chip($("c-bridge"), arm.tripped ? `TRIPPED: ${arm.tripped}` : arm.torque ? "holding" : "limp",
          arm.tripped ? "bad" : arm.torque ? "ok" : "");
     $("b-rearm").classList.toggle("hidden", !arm.tripped);
+    $("c-sim").classList.toggle("hidden", !arm.sim);
     const stale = d.now - arm.t > 1.0;
     chip($("c-link"), stale ? "no telemetry" : "live", stale ? "bad" : "ok");
     if (arm.t !== lastArmT) { lastArmT = arm.t; pushSample(d); redraw(); }
@@ -155,6 +169,11 @@ function render(d) {
     $("estimate").title = `tip [${tip}] mm, common-mode ${b.common_mm.toFixed(2)} mm`;
   }
   renderTest(d.test);
+  for (const n of d.notices || []) {
+    if (lastNotice !== null && n.n > lastNotice) toast(n.text, true);
+  }
+  if (d.notices && d.notices.length) lastNotice = Math.max(lastNotice ?? 0, d.notices[d.notices.length - 1].n);
+  else if (lastNotice === null) lastNotice = 0;
 }
 
 // ---------------------------------------------------------------- SSE

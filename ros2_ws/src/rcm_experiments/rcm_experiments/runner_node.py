@@ -39,6 +39,32 @@ from .context import Aborted, ProtocolError, TestContext, Tripped
 from .protocols import PROTOCOLS, resolve
 
 
+def safe(fn):
+    """Never let a callback exception kill the node: log the traceback to the terminal AND to
+    <data_dir>/runner_errors.log, publish a notice, and (for services) return a failure."""
+    import functools
+
+    @functools.wraps(fn)
+    def wrap(self, *a):
+        try:
+            return fn(self, *a)
+        except Exception as e:  # noqa: BLE001
+            tb = traceback.format_exc()
+            self.get_logger().error(f"{fn.__name__} crashed: {e!r}\n{tb}")
+            try:
+                self.data_dir.mkdir(parents=True, exist_ok=True)
+                with open(self.data_dir / "runner_errors.log", "a") as f:
+                    f.write(f"--- {time.strftime('%Y-%m-%d %H:%M:%S')} {fn.__name__}\n{tb}\n")
+                self.notice_pub.publish(String(data=f"test_runner: {fn.__name__} error: {e!r}"))
+            except Exception:  # noqa: BLE001
+                pass
+            if len(a) == 2 and hasattr(a[1], "success"):      # service (request, response)
+                a[1].success, a[1].message = False, f"internal error: {e!r} (see runner_errors.log)"
+                return a[1]
+            return None
+    return wrap
+
+
 def default_data_dir() -> str:
     if os.environ.get("RCM_DATA"):
         return os.environ["RCM_DATA"]
@@ -140,11 +166,13 @@ class Runner(Node):
         self.worker: threading.Thread | None = None
         self.tel_fh = self.tel = self.ev_fh = self.ev = None
         self.file_lock = threading.Lock()
+        self.start_lock = threading.Lock()       # one start at a time (double-clicks)
 
         cg = ReentrantCallbackGroup()
         self.bend_pub = self.create_publisher(BendCommand, "/rcm/cmd_bend", 10)
         self.goal_pub = self.create_publisher(TendonGoal, "/rcm/goal", 10)
         self.status_pub = self.create_publisher(String, "/rcm/test/status", 10)
+        self.notice_pub = self.create_publisher(String, "/rcm/notice", 10)
         latched = QoSProfile(depth=1, durability=DurabilityPolicy.TRANSIENT_LOCAL)
         self.create_subscription(ArmState, "/rcm/state", self.on_state, 20, callback_group=cg)
         self.create_subscription(BendState, "/rcm/bend_estimate", self.on_bend, 20, callback_group=cg)
@@ -158,12 +186,14 @@ class Runner(Node):
         self.get_logger().info(f"protocols: {self.protocols_dir}  data: {self.data_dir}")
 
     # ---------------- subscriptions ----------------
+    @safe
     def on_info(self, msg: String):
         self.kin_info = json.loads(msg.data)
 
     def on_bend(self, msg: BendState):
         self.bend_est = msg
 
+    @safe
     def on_state(self, msg: ArmState):
         with self.lock:
             for s in msg.servos:
@@ -179,8 +209,11 @@ class Runner(Node):
         return list(self.kin_info.get("ids") or sorted(self.servos))
 
     def open_session(self, stem: str) -> Path:
-        d = self.data_dir / f"{time.strftime('%Y%m%d_%H%M%S')}_{stem}"
-        d.mkdir(parents=True, exist_ok=True)
+        base = f"{time.strftime('%Y%m%d_%H%M%S')}_{stem}"
+        d, k = self.data_dir / base, 2
+        while d.exists():                       # never reuse/truncate a session folder
+            d, k = self.data_dir / f"{base}_{k}", k + 1
+        d.mkdir(parents=True)
         ids = self._ids()
         cols = ["host_t", "stamp"]
         for i in ids:
@@ -247,6 +280,7 @@ class Runner(Node):
             raise ProtocolError(f"{f.name}: 'protocol' must be one of {sorted(PROTOCOLS)}")
         return d
 
+    @safe
     def on_list(self, _req, res: Trigger.Response):
         out = {}
         for f in sorted(self.protocols_dir.glob("*.yaml")):
@@ -260,7 +294,17 @@ class Runner(Node):
         return res
 
     # ---------------- services ----------------
+    @safe
     def on_start(self, req: StartTest.Request, res: StartTest.Response):
+        if not self.start_lock.acquire(blocking=False):
+            res.success, res.message = False, "busy: another start is in progress"
+            return res
+        try:
+            return self._start(req, res)
+        finally:
+            self.start_lock.release()
+
+    def _start(self, req: StartTest.Request, res: StartTest.Response):
         if self.worker and self.worker.is_alive():
             res.success, res.message = False, f"busy: {self.protocol} is {self.state}"
             return res
@@ -333,6 +377,7 @@ class Runner(Node):
             self.prompt_obj = None
             self.set_state(final)
 
+    @safe
     def on_respond(self, req: Respond.Request, res: Respond.Response):
         if self.prompt_obj is None:
             res.success, res.message = False, "no prompt pending"
@@ -342,6 +387,7 @@ class Runner(Node):
         res.success, res.message = True, "ok"
         return res
 
+    @safe
     def on_abort(self, _req, res: Trigger.Response):
         if not (self.worker and self.worker.is_alive()):
             res.success, res.message = False, "nothing running"
@@ -350,6 +396,7 @@ class Runner(Node):
         res.success, res.message = True, "abort requested (arm holds position)"
         return res
 
+    @safe
     def publish_status(self):
         st = {"state": self.state, "protocol": self.protocol, "session_dir": self.session_dir,
               "prompt": self.prompt_obj, "log": self.logs[-40:], "result": self.result,
