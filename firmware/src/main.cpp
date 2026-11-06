@@ -80,9 +80,19 @@ static void handleLine(String line) {
   String s(cmd);
 
   if (s == "help") {
-    Serial.println("scan | setid o n | zero id | torque id 0/1 | pos id p [spd] [acc] | read id | stream id|all hz | stream off | stop");
+    Serial.println("scan | baudscan | setid o n | zero id | torque id 0/1 | pos id p [spd] [acc] | read id | stream id|all hz | stream off | stop");
   } else if (s == "scan") {
     doScan();
+  } else if (s == "baudscan") {
+    // Try common ST-bus rates in case a servo isn't at factory 1 Mbps
+    const uint32_t rates[] = {1000000, 500000, 250000, 128000, 115200, 76800, 57600, 38400};
+    for (uint32_t r : rates) {
+      Serial1.updateBaudRate(r); delay(20);
+      int hits = 0;
+      for (int id = 0; id <= MAX_SCAN_ID; id++) if (st.Ping(id) != -1) { Serial.printf("  %lu baud: id %d\n", r, id); hits++; }
+      if (!hits) Serial.printf("  %lu baud: none\n", r);
+    }
+    Serial1.updateBaudRate(BUS_BAUD);
   } else if (s == "setid" && n >= 3) {
     doSetId(a, b);
   } else if (s == "zero" && n >= 2) {
@@ -112,7 +122,7 @@ static void handleLine(String line) {
     streamId = -2;
     Serial.println("all torque off");
   } else {
-    Serial.println("? (type help)");
+    Serial.printf("? [%s] (type help)\n", line.c_str());
   }
 }
 
@@ -130,7 +140,7 @@ void loop() {
   while (Serial.available()) {
     char ch = Serial.read();
     if (ch == '\n' || ch == '\r') { handleLine(buf); buf = ""; }
-    else buf += ch;
+    else if (ch >= 32 && ch < 127) buf += ch;   // drop stray control bytes
   }
   if (streamId != -2 && millis() - lastStream >= streamPeriodMs) {
     lastStream = millis();

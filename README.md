@@ -32,3 +32,19 @@ See `docs/motor_bringup.md`.
 | 3  | Tendon C (240°) |
 | 4  | Wrist roll (later) |
 | 5  | Gripper (later) |
+
+## Boot script
+```bash
+source boot.sh      # every new terminal; or add to ~/.bashrc:
+                    #   source ~/development/RoboticContinuumArm/boot.sh
+rcm help            # build | flash | console | log | up | port | cd | ws_build | status | reload
+```
+Modules live in `scripts/boot.d/` and load in filename order (`00-paths`, `10-ros`, `20-serial`, `30-firmware`).
+To add one, create `scripts/boot.d/NN-name.sh`:
+```bash
+rcm_section "name"
+# checks: rcm_ok / rcm_warn / rcm_fail / rcm_info "msg"
+rcm_cmd_foo() { echo "does foo $*"; }
+rcm_register foo "one-line description"   # -> `rcm foo`
+```
+Then `rcm reload`. Modules are sourced, so never `exit` or `set -e` in them; use `return`.
