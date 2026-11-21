@@ -68,3 +68,60 @@ header .btn { flex: none; }
 pre#t-log { height: 120px; }
 #estimate { margin-left: auto; }
 .btn:disabled { opacity: .45; cursor: not-allowed; filter: none; }
+
+/* ---- tip IMU 3D view (CSS 3D, no library) ---- */
+.imu-row { display: flex; gap: 16px; align-items: center; flex-wrap: wrap; }
+.imu-view { width: 200px; height: 170px; perspective: 520px; flex: none; background: #0c0f13;
+            border: 1px solid var(--line); border-radius: 8px; overflow: hidden; }
+.imu-cam { position: relative; width: 100%; height: 100%; transform-style: preserve-3d;
+           transform: rotateX(-22deg) rotateY(-32deg); }
+.imu-body { position: absolute; left: 50%; top: 50%; width: 0; height: 0; transform-style: preserve-3d; }
+.imu-body .f { position: absolute; display: flex; align-items: center; justify-content: center; font-size: 11px;
+               color: #fff; border: 1px solid rgba(255,255,255,.35); backface-visibility: visible; }
+.f.top, .f.bottom { width: 110px; height: 70px; margin: -35px 0 0 -55px; }
+.f.top { background: rgba(76,141,255,.85); transform: rotateX(90deg) translateZ(9px); }
+.f.bottom { background: rgba(60,66,78,.9); transform: rotateX(-90deg) translateZ(9px); }
+.f.px, .f.nx { width: 70px; height: 18px; margin: -9px 0 0 -35px; background: rgba(229,72,77,.8); }
+.f.px { transform: rotateY(90deg) translateZ(55px); } .f.nx { transform: rotateY(-90deg) translateZ(55px); opacity: .7; }
+.f.py, .f.ny { width: 110px; height: 18px; margin: -9px 0 0 -55px; background: rgba(47,191,113,.8); }
+.f.py { transform: rotateY(180deg) translateZ(35px); } .f.ny { transform: translateZ(35px); opacity: .7; }
+.imu-body .ax { position: absolute; left: 0; top: 0; transform-origin: 0 0; }
+.ax.axx { width: 85px; height: 3px; background: #e5484d; }
+.ax.axz { width: 3px; height: 70px; background: #4c8dff; transform: translateY(-70px); }
+.ax.axy { width: 85px; height: 3px; background: #2fbf71; transform: rotateY(90deg); }
+.imu-nums { flex: 1; min-width: 200px; display: flex; flex-direction: column; gap: 6px; }
+.imu-nums .big { display: flex; flex-direction: column; }
+.imu-nums .big b { font-size: 30px; font-variant-numeric: tabular-nums; }
+#p-imu { margin-top: 8px; }
+
+/* a pending operator prompt must be impossible to miss */
+.prompt-chip { border: 0; cursor: pointer; font: inherit; font-size: 12px; font-weight: 700; animation: pulse 1.2s ease-in-out infinite; }
+.prompt.flash { animation: flash 1s ease-out 2; }
+@keyframes pulse { 50% { filter: brightness(1.35); } }
+@keyframes flash { 0% { box-shadow: 0 0 0 0 var(--warn); } 100% { box-shadow: 0 0 0 14px transparent; } }
+@media (prefers-reduced-motion: reduce) { .prompt-chip, .prompt.flash { animation: none; } }
+
+/* protocol live plot (e.g. max_bend: pull vs IMU tilt) */
+#t-live canvas { width: 100%; height: 220px; display: block; margin-top: 6px; background: #0c0f13;
+                 border: 1px solid var(--line); border-radius: 6px; }
+#t-live-sum { overflow-wrap: anywhere; }
+
+/* tabs */
+nav.tabs { display: flex; gap: 4px; max-width: 760px; margin: 10px auto 0; padding: 0 16px; }
+.tab { background: none; border: 1px solid var(--line); border-bottom: 0; color: var(--muted); font: inherit;
+       padding: 6px 16px; border-radius: 8px 8px 0 0; cursor: pointer; }
+.tab.active { background: var(--card); color: var(--text); font-weight: 600; }
+.tab-dot { display: inline-block; width: 8px; height: 8px; border-radius: 50%; background: var(--warn); margin-left: 4px; }
+.form { display: grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: 8px; margin-bottom: 8px; }
+.form label { display: flex; flex-direction: column; gap: 3px; color: var(--muted); font-size: 12px; }
+.form input, .form select { width: 100%; }
+
+/* flex sensors */
+.flex-row { display: grid; grid-template-columns: 130px 70px 1fr; gap: 10px; align-items: center; margin: 6px 0; }
+.flex-row .nm { font-size: 13px; } .flex-row .nm small { display: block; color: var(--muted); font-size: 11px; }
+.flex-row .ang { font-size: 22px; font-weight: 700; font-variant-numeric: tabular-nums; text-align: right; }
+.flex-row .ang.est { color: var(--warn); }
+.flex-bar { position: relative; height: 16px; background: #0c0f13; border: 1px solid var(--line); border-radius: 8px; overflow: hidden; }
+.flex-bar i { position: absolute; left: 0; top: 0; bottom: 0; background: var(--accent); border-radius: 8px; transition: width .08s linear; }
+.flex-bar b { position: absolute; top: 0; bottom: 0; width: 1px; background: #4a5260; }
+@media (max-width: 480px) { .flex-row { grid-template-columns: 100px 60px 1fr; } }

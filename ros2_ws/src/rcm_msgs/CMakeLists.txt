@@ -6,7 +6,7 @@ find_package(std_msgs REQUIRED)
 find_package(geometry_msgs REQUIRED)
 rosidl_generate_interfaces(${PROJECT_NAME}
   "msg/ServoState.msg" "msg/ArmState.msg" "msg/TendonGoal.msg"
-  "msg/BendCommand.msg" "msg/BendState.msg"
+  "msg/BendCommand.msg" "msg/BendState.msg" "msg/ImuState.msg" "msg/FlexState.msg"
   "srv/SetTorque.srv" "srv/SetZero.srv" "srv/StartTest.srv" "srv/Respond.srv"
   DEPENDENCIES std_msgs geometry_msgs)
 ament_export_dependencies(rosidl_default_runtime)

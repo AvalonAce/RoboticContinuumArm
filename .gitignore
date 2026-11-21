@@ -1,5 +1,6 @@
 # PlatformIO
 firmware/.pio/
+firmware_sensors/.pio/
 .vscode/
 
 # ROS 2

@@ -18,6 +18,7 @@ import contextlib
 import glob
 import os
 import queue
+import re
 import threading
 import time
 from dataclasses import dataclass
@@ -26,6 +27,9 @@ from pathlib import Path
 import serial  # pyserial
 
 CENTER = 2048
+# A lost '\n' glues a telemetry line to the next line ("...0*3Fsync 3 servos"). Telemetry always ends in
+# '*HH', so split after every checksum token to recover the second line (often a command reply).
+_SPLIT_AFTER_CHECKSUM = re.compile(r"(?<=\*[0-9A-F]{2})")
 COUNTS_PER_REV = 4096
 FIELDS = ("t_ms", "id", "pos", "speed", "load", "volt_dV", "temp_C", "current", "moving")
 
@@ -57,13 +61,32 @@ class ServoState:
         return self.volt_dV / 10.0
 
 
+SENSOR_KEYS = ("Adafruit", "QT_Py", "Espressif", "1a86", "CH9102", "CH340")   # sensor-board USB names
+
+
+def sensor_ports() -> set[str]:
+    """Real device paths of plugged-in sensor boards (QT Py etc.)."""
+    return {os.path.realpath(p) for p in glob.glob("/dev/serial/by-id/*") if any(k in p for k in SENSOR_KEYS)}
+
+
+def is_sensor_port(port: str) -> bool:
+    rp = os.path.realpath(port)
+    return rp in sensor_ports() or any(k in port for k in SENSOR_KEYS) or "ttyACM" in rp
+
+
 def find_port() -> str | None:
-    if os.environ.get("RCM_PORT") and os.path.exists(os.environ["RCM_PORT"]):
-        return os.environ["RCM_PORT"]
-    for pat in ("/dev/serial/by-id/*CP210*", "/dev/ttyUSB*", "/dev/ttyACM*"):
-        hits = sorted(glob.glob(pat))
-        if hits:
-            return hits[0]
+    """Servo board (Waveshare, CP2102) port. Never returns the sensor board: with the servo board
+    unplugged this returns None rather than grabbing whatever serial device is present."""
+    env = os.environ.get("RCM_PORT")
+    if env and os.path.exists(env) and not is_sensor_port(env):   # a stale RCM_PORT can point at the IMU
+        return env
+    hits = sorted(glob.glob("/dev/serial/by-id/*CP210*"))
+    if hits:
+        return hits[0]
+    sensors = sensor_ports()
+    for p in sorted(glob.glob("/dev/ttyUSB*")):           # CP210x enumerates as ttyUSB, never ttyACM
+        if os.path.realpath(p) not in sensors:
+            return p
     return None
 
 
@@ -96,6 +119,8 @@ class RCM:
         self._rx_bytes = 0
         self._recent: list[str] = []          # last non-telemetry lines, for error messages
         self.bad_lines = 0                     # corrupted / failed-checksum telemetry lines dropped
+        self.retried = 0                       # commands that needed a resend (lost reply)
+        self.slow_writes: list[tuple] = []     # (wall time, line, lock wait s, write s) for writes > 0.2 s
         self.link_error: str | None = None     # set if the reader thread stops (port gone, etc.)
         self.last_rx = time.monotonic()
         self.trip_samples = 3                  # consecutive over-limit samples before a load trip
@@ -103,24 +128,38 @@ class RCM:
 
         # Opening the port pulses DTR/RTS -> the board's auto-reset circuit reboots the ESP32.
         # We embrace that: it guarantees a known state, and the boot banner tells us the IDs.
+        if is_sensor_port(self.port):
+            raise RCMError(f"{self.port} is the sensor board, not the servo board")
         self.ser = serial.Serial(self.port, 115200, timeout=0.05, exclusive=True)
         self._rx = threading.Thread(target=self._reader, daemon=True)
         self._rx.start()
-
-        boot = self.expect("found", timeout=boot_timeout)
-        if boot is None:                       # no reset happened -> ask explicitly
-            self.ids = self.scan()
-        else:
-            self.ids = self._parse_found(boot)
-        if hz:
-            self.stream(hz)
+        try:
+            boot = self.expect("found", timeout=boot_timeout)
+            if boot is None:                   # no reset happened -> ask explicitly
+                self.ids = self.scan()
+            else:
+                self.ids = self._parse_found(boot)
+            if hz:
+                self.stream(hz)
+        except BaseException:                  # never leave the port locked after a failed connect
+            self._run = False
+            try:
+                self.ser.close()
+            except Exception:  # noqa: BLE001
+                pass
+            raise
 
     # ---------------- low level ----------------
     def send(self, line: str) -> None:
         if self.verbose:
             print(f">> {line}")
+        t0 = time.monotonic()
         with self._wlock:
+            t1 = time.monotonic()
             self.ser.write((line + "\n").encode())
+        t2 = time.monotonic()
+        if t2 - t0 > 0.2:                      # diagnostics: who/what is slow
+            self.slow_writes.append((time.time(), line, round(t1 - t0, 3), round(t2 - t1, 3)))
 
     def expect(self, prefix: str, timeout: float = 1.0) -> str | None:
         """Wait for a non-telemetry line starting with `prefix`; discard others."""
@@ -134,16 +173,24 @@ class RCM:
                 return msg
         return None
 
-    def command(self, line: str, reply: str | None = None, timeout: float = 1.0) -> str | None:
+    def command(self, line: str, reply: str | None = None, timeout: float = 1.0,
+                retries: int = 1) -> str | None:
+        """Send a console command and wait for its reply. Every command we use is idempotent
+        (absolute goals, set-speed, torque on/off, scan), so a reply lost to a serial glitch is
+        handled by simply sending it again."""
         self._check_trip()
-        self._drain()
-        self.send(line)
-        if reply is None:
-            return None
-        r = self.expect(reply, timeout)
-        if r is None:
-            raise RCMError(f"no '{reply}' reply to '{line}' — {self.diag()}")
-        return r
+        for attempt in range(retries + 1):
+            self._drain()
+            self.send(line)
+            if reply is None:
+                return None
+            r = self.expect(reply, timeout if attempt == 0 else max(timeout, 0.5))
+            if r is not None:
+                if attempt:
+                    self.retried += 1
+                return r
+            self._check_trip()
+        raise RCMError(f"no '{reply}' reply to '{line}' (after {retries + 1} tries) — {self.diag()}")
 
     def _drain(self) -> None:
         while not self._msgs.empty():
@@ -165,10 +212,11 @@ class RCM:
             self.last_rx = time.monotonic()
             while b"\n" in buf:
                 raw, buf = buf.split(b"\n", 1)
-                try:
-                    self._handle(raw.decode(errors="replace").strip())
-                except Exception:  # noqa: BLE001 — one bad line must never kill the reader
-                    self.bad_lines += 1
+                for seg in _SPLIT_AFTER_CHECKSUM.split(raw.decode(errors="replace")):
+                    try:
+                        self._handle(seg.strip())
+                    except Exception:  # noqa: BLE001 — one bad line must never kill the reader
+                        self.bad_lines += 1
 
     @staticmethod
     def _verify(line: str) -> str | None:
@@ -286,6 +334,19 @@ class RCM:
         args = " ".join(f"{k} {v}" for k, v in tg.items())
         self.command(f"sync {speed} {acc} {args}", reply="sync")
         self.targets.update(tg)
+
+    def wheel(self, sid: int, speed: int, acc: int = 50) -> None:
+        """Continuous rotation (wheel mode), signed counts/s; 0 stops. Used for spooling tendons.
+        Call posmode() afterwards — the rest of the stack assumes position mode."""
+        self.command(f"wheel {int(sid)} {int(speed)} {int(acc)}", reply="wheel")
+
+    def posmode(self, sid: int) -> int:
+        """Stop, hold the current angle, return to position mode. Returns that position (-1 if unknown)."""
+        r = self.command(f"posmode {int(sid)}", reply="posmode")
+        try:
+            return int(r.rsplit(" ", 1)[1])
+        except (ValueError, IndexError):
+            return -1
 
     def move_one(self, sid: int, pos: int, speed: int = 800, acc: int = 30) -> None:
         self.move({sid: pos}, speed, acc)

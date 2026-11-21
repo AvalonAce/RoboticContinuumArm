@@ -15,7 +15,8 @@
 | `rcm_kinematics` | `kinematics` | `cc.py` (pure Python, unit-tested): bend (θ, φ) ↔ tendon Δl ↔ counts; publishes `/rcm/bend_estimate`; stores calibration |
 | `rcm_experiments` | `test_runner` | protocols (`protocols.py`), YAML configs (`protocols/`), session logging |
 | `rcm_dashboard` | `dashboard` | stdlib HTTP + Server-Sent Events, no extra installs; page in `web/` |
-| `rcm_bringup` | – | `rcm.launch.py`, `config/arm.yaml` |
+| `rcm_sensors` | `sensor_bridge` | tip IMU: serial reader, gyro-bias cal, 6-axis Madgwick, `/rcm/imu/*` (see docs/sensors.md) |
+| `rcm_bringup` | – | `rcm.launch.py` (`sim:=`, `arm:=false`, `sensors:=false`), `config/arm.yaml` |
 
 ## Run
 ```bash

@@ -15,22 +15,32 @@
     <span id="c-link" class="chip">link</span>
     <span id="c-bridge" class="chip">bridge</span>
     <span id="c-cal" class="chip">calibration</span>
+    <span id="c-imu" class="chip">IMU</span>
+    <span id="c-flex" class="chip">flex</span>
+    <button id="c-prompt" class="chip warn prompt-chip hidden" title="Jump to the question">Test waiting for you ↓</button>
   </div>
   <button id="b-rearm" class="btn hidden">Rearm</button>
   <button id="b-estop" class="btn estop" title="Esc">E-STOP</button>
 </header>
 
+<nav class="tabs">
+  <button class="tab active" data-tab="control">Control</button>
+  <button class="tab" data-tab="tests">Tests <span id="tab-dot" class="tab-dot hidden"></span></button>
+</nav>
+
 <main id="main">
-  <section class="card">
+  <section class="card" data-tab="control">
     <h2>Setup</h2>
     <div class="row btns">
-      <button id="b-rest" class="btn" title="Move slowly to the winding pose and hold">Go to rest</button>
-      <button id="b-cal" class="btn">Calibrate</button>
+      <button id="b-home" class="btn primary" title="Current motor positions become home (re-centres each servo)">Save home</button>
+      <button id="b-rest" class="btn" title="Move slowly back to the saved home and hold">Go to home</button>
     </div>
-    <p class="small muted">Before winding: Go to rest (servos hold) → wind tendons with slight slack, tie off → Calibrate.</p>
+    <p class="small muted">Tension the tendons (rcm spool / jog), arm straight → <b>Save home</b>. That pose is the zero for
+      bends and tests, and where <b>Go to home</b> returns. Each servo's encoder is re-centred there (reads 2048) so every
+      tendon has equal travel both ways.</p>
   </section>
 
-  <section class="card">
+  <section class="card" data-tab="control">
     <h2>Move</h2>
     <label class="row">θ <input id="theta" type="range" min="0" max="90" step="1" value="0"><output id="o-theta">0°</output></label>
     <label class="row">φ <input id="phi" type="range" min="-180" max="180" step="5" value="0"><output id="o-phi">0°</output></label>
@@ -41,27 +51,85 @@
     </div>
   </section>
 
-  <section class="card">
-    <h2>Test</h2>
-    <div class="row">
-      <select id="proto"></select>
-      <button id="b-start" class="btn primary">Start</button>
-      <button id="b-abort" class="btn warn" title="Stops the test; arm holds position">Abort</button>
+  <section class="card" data-tab="control">
+    <h2>Flex sensors <small id="flex-msg"></small></h2>
+    <div id="flex-rows"></div>
+    <div class="row btns">
+      <button id="b-flex-flat" class="btn" title="Arm straight / sensors flat: this is 0°">Set flat (0°)</button>
+      <button id="b-flex-90" class="btn" title="Bend the sensor(s) to 90° and press: calibrates the 90° point">Set 90°</button>
+      <span id="flex-sum" class="small muted mono" style="margin-left:auto"></span>
     </div>
-    <div class="row"><span id="t-state" class="chip">idle</span><span id="t-elapsed" class="small muted"></span></div>
+  </section>
+
+  <section class="card" data-tab="control">
+    <h2>Tip IMU <small id="imu-msg"></small></h2>
+    <div class="imu-row">
+      <div class="imu-view" title="IMU board orientation (relative to reference once set)">
+        <div class="imu-cam"><div id="imu-body" class="imu-body">
+          <div class="f top">TOP +z</div><div class="f bottom">bottom</div>
+          <div class="f px">+x</div><div class="f nx">−x</div>
+          <div class="f py">+y</div><div class="f ny">−y</div>
+          <div class="ax axx"></div><div class="ax axy"></div><div class="ax axz"></div>
+        </div></div>
+      </div>
+      <div class="imu-nums">
+        <div class="big"><span class="muted small">tilt from reference</span><b id="imu-tilt">–</b></div>
+        <div class="mono small">roll <span id="imu-roll">–</span>° · pitch <span id="imu-pitch">–</span>°</div>
+        <div class="mono small muted" id="imu-extra"></div>
+        <div class="row btns">
+          <button id="b-imu-ref" class="btn" title="Current pose becomes the zero (e.g. arm straight)">Set reference</button>
+          <button id="b-imu-cal" class="btn" title="Hold still ~2 s">Recalibrate gyro</button>
+        </div>
+      </div>
+    </div>
+    <div id="p-imu"></div>
+  </section>
+
+
+  <section class="card hidden" data-tab="tests" id="test-card">
+    <h2>Running test</h2>
+    <div class="row"><span id="t-state" class="chip">idle</span><span id="t-elapsed" class="small muted"></span>
+      <button id="b-abort" class="btn warn" style="margin-left:auto" title="Stops the test; arm holds position">Abort</button></div>
     <div id="prompt" class="prompt hidden">
       <div id="prompt-text"></div>
       <div class="row"><input id="prompt-in" type="text"><button id="b-answer" class="btn primary">Continue ⏎</button></div>
     </div>
+    <div id="t-live" class="hidden">
+      <h3 id="t-live-title"></h3>
+      <div id="t-live-sum" class="small mono"></div>
+      <canvas id="t-live-c" height="220"></canvas>
+    </div>
     <pre id="t-log"></pre>
   </section>
 
-  <section class="card">
+  <section class="card hidden" data-tab="tests">
+    <h2>Max bend <small>one tendon pulls, the others pay out; stops at the IMU target, then releases</small></h2>
+    <div class="form">
+      <label>Pull tendon <select id="mb-tendon"><option>1</option><option>2</option><option selected>3</option></select></label>
+      <label>Target tilt (°) <input id="mb-target" type="number" value="90" min="5" max="150" step="5"></label>
+      <label>Step (counts) <input id="mb-step" type="number" value="15" min="2" max="200" step="1"></label>
+      <label>Release ratio <input id="mb-ratio" type="number" value="0.5" min="0" max="1.5" step="0.05"></label>
+      <label>Load limit <input id="mb-load" type="number" value="700" min="50" max="880" step="10"></label>
+    </div>
+    <div class="row btns"><button id="b-mb" class="btn primary">Start max bend</button>
+      <span class="small muted">Needs Save home + IMU “ok”. 15 counts ≈ 0.25 mm of line.</span></div>
+  </section>
+
+  <section class="card hidden" data-tab="tests">
+    <h2>Other protocols</h2>
+    <div class="row">
+      <select id="proto"></select>
+      <button id="b-start" class="btn">Start</button>
+    </div>
+    <p class="small muted">Parameters: Control → Advanced → Test parameters.</p>
+  </section>
+
+  <section class="card" data-tab="control">
     <h2>Tendon load</h2>
     <div id="p-load"></div>
   </section>
 
-  <details class="card" id="adv">
+  <details class="card" id="adv" data-tab="control">
     <summary>Advanced</summary>
     <h3>Servos</h3>
     <table id="servos"><thead><tr>

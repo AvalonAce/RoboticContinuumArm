@@ -15,7 +15,8 @@ docs/       motor bring-up, software architecture
 ```bash
 source boot.sh
 rcm ws_build        # first time / after msg changes
-rcm sim             # no hardware: simulated board     (or: rcm launch  for the real arm)
+rcm launch          # real hardware — works with servo board, sensor board, both or neither (hot-plug)
+                    # (rcm sim = simulated servos + IMU, no hardware)
 rcm dash            # http://localhost:8080
 ```
 

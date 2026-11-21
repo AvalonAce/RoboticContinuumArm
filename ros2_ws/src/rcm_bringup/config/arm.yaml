@@ -15,16 +15,23 @@ kinematics:
   ros__parameters:
     length_mm: 200.0          # PLACEHOLDER  section length L
     tendon_radius_mm: 15.0    # PLACEHOLDER  backbone axis -> tendon routing hole
-    spool_radius_mm: 10.0     # PLACEHOLDER  winch spool radius (to tendon centerline)
+    spool_radius_mm: 11.0     # Motorwheel.STL groove floor (22 mm dia); add half the line diameter if thick
     ids: [1, 2, 3]
     angles_deg: [0.0, 120.0, 240.0]   # tendon i angular position around backbone
-    reel_in_sign: [1, 1, 1]   # PLACEHOLDER  +1 if increasing counts SHORTENS that tendon
+    reel_in_sign: [-1, -1, -1]   # measured: 'A' in rcm spool (counts decreasing) reels in on all three
     takeup_mm: 0.0            # extra common-mode reel-in (pretension trim)
     theta_max_deg: 90.0
     pretension_allowance_mm: 3.0   # expected reel-in from "slight slack" to taut; shifts the rest pose
     rest_counts: [-1, -1, -1]      # winding rest pose per servo; -1 = auto (center, offset by allowance)
     rest_speed: 150
     calibration_file: ""      # "" = $RCM_ROOT/config/calibration.yaml
+
+sensor_bridge:
+  ros__parameters:
+    port: ""              # "" = auto-detect sensor board (never the CP210x servo board); launch arg sensor_port:=
+    beta: 0.08            # Madgwick gain: higher trusts accel more (faster, noisier), lower trusts gyro
+    bias_s: 2.0           # still time needed for gyro-bias calibration at startup
+    frame_id: rcm_imu_link
 
 test_runner:
   ros__parameters:

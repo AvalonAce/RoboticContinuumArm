@@ -55,6 +55,17 @@ class TestContext:
     def log(self, msg: str) -> None:
         raise NotImplementedError
 
+    def imu(self) -> dict | None:
+        """Latest tip-IMU reading {tilt, roll, pitch, has_ref, age_s} or None if offline/calibrating."""
+        return None
+
+    def imu_set_reference(self) -> bool:
+        """Current IMU pose becomes the 'straight' reference. True on success."""
+        return False
+
+    def plot(self, **live) -> None:
+        """Live plot for the dashboard: plot(title=, x_label=, y_label=, series={name: [[x, y], ...]}, summary=)."""
+
     geometry: dict = {}          # kinematics info (ids, reel_in_sign, theta_max_deg, ...)
 
     # ---------------- built on primitives ----------------
@@ -162,3 +173,19 @@ class TestContext:
                 "n": len(d["load"]),
             }
         return out
+
+    def imu_sample(self, seconds: float) -> dict | None:
+        """Mean IMU tilt/roll/pitch over `seconds`; None if the IMU gave no fresh data."""
+        vals = {"tilt": [], "roll": [], "pitch": []}
+        end = time.monotonic() + seconds
+        while time.monotonic() < end:
+            self.check()
+            m = self.imu()
+            if m and m["age_s"] < 0.3:
+                for k in vals:
+                    if m[k] == m[k]:          # skip NaN
+                        vals[k].append(m[k])
+            time.sleep(self.poll_s)
+        if not vals["tilt"]:
+            return None
+        return {k: round(statistics.fmean(v), 2) if v else float("nan") for k, v in vals.items()}

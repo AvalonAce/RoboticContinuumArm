@@ -15,7 +15,10 @@ import os
 import time
 from pathlib import Path
 
+import signal
+
 import rclpy
+from rclpy.executors import ExternalShutdownException
 import yaml
 from rclpy.node import Node
 from rclpy.qos import DurabilityPolicy, QoSProfile
@@ -133,6 +136,8 @@ class Kinematics(Node):
         return res
 
     def rest(self) -> list[int]:
+        if "zero_counts" in self.cal:          # saved home (Save home) doubles as the rest pose
+            return [int(z) for z in self.g.zero_counts]
         auto = rest_counts(self.g)
         ov = self.rest_override + [-1] * len(auto)
         return [int(ov[k]) if ov[k] >= 0 else a for k, a in enumerate(auto)]
@@ -157,12 +162,15 @@ def main(args=None):
     node = Kinematics()
     try:
         rclpy.spin(node)
-    except KeyboardInterrupt:
+    except (KeyboardInterrupt, ExternalShutdownException):
         pass
     finally:
-        node.destroy_node()
-        if rclpy.ok():
-            rclpy.shutdown()
+        signal.signal(signal.SIGINT, signal.SIG_IGN)   # 2nd SIGINT (from ros2 launch) must not cut cleanup short
+        try:
+            node.destroy_node()
+        except Exception:  # noqa: BLE001
+            pass
+        rclpy.try_shutdown()
 
 
 if __name__ == "__main__":

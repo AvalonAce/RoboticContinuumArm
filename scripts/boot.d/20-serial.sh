@@ -2,13 +2,32 @@
 rcm_section "serial"
 
 _rcm_find_port() {
+  # Servo board = Waveshare (CP2102). Never return the sensor board (QT Py: ttyACM / Espressif / 1a86).
   local p
-  # Prefer the stable by-id path (survives replug / enumeration order)
   for p in /dev/serial/by-id/*CP210*; do [[ -e "$p" ]] && { echo "$p"; return; }; done
-  for p in /dev/ttyUSB* /dev/ttyACM*; do [[ -e "$p" ]] && { echo "$p"; return; }; done
+  local sensors=""
+  for p in /dev/serial/by-id/*; do
+    case "$p" in *Adafruit*|*QT_Py*|*Espressif*|*1a86*|*CH9102*|*CH340*) sensors+=" $(readlink -f "$p")" ;; esac
+  done
+  for p in /dev/ttyUSB*; do
+    [[ -e "$p" && " $sensors " != *" $(readlink -f "$p") "* ]] && { echo "$p"; return; }
+  done
 }
 
-if [[ -n "${RCM_PORT:-}" && -e "$RCM_PORT" ]]; then
+# A preset RCM_PORT is kept only if it still exists and isn't the sensor board (ttyACM / QT Py)
+_rcm_is_sensor_port() {
+  local rp; rp="$(readlink -f "$1")"
+  [[ "$1" == *Adafruit* || "$1" == *QT_Py* || "$1" == *Espressif* || "$rp" == /dev/ttyACM* ]] && return 0
+  local p
+  for p in /dev/serial/by-id/*; do
+    case "$p" in *Adafruit*|*QT_Py*|*Espressif*|*1a86*|*CH9102*|*CH340*)
+      [[ "$(readlink -f "$p")" == "$rp" ]] && return 0 ;;
+    esac
+  done
+  return 1
+}
+
+if [[ -n "${RCM_PORT:-}" && -e "$RCM_PORT" ]] && ! _rcm_is_sensor_port "$RCM_PORT"; then
   rcm_ok "port (preset) ${RCM_PORT}"
 else
   RCM_PORT="$(_rcm_find_port)"
@@ -17,7 +36,7 @@ else
     rcm_ok "board at ${RCM_PORT}"
   else
     unset RCM_PORT
-    rcm_warn "no board found — plug in USB-C (data cable, not charge-only)"
+    rcm_info "servo board not plugged in (motor controls disabled until it is)"
   fi
 fi
 

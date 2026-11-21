@@ -7,7 +7,8 @@ Srv  /rcm/test/list     std_srvs/Trigger     JSON of available protocol files
 Pub  /rcm/test/status   std_msgs/String      JSON status (5 Hz + on change)
 
 Each run writes   <data_dir>/<YYYYmmdd_HHMMSS>_<stem>/
-    telemetry.csv  one row per /rcm/state sample (all servos, bend estimate, command)
+    telemetry.csv  one row per /rcm/state sample (all servos, bend estimate, command, latest IMU angles)
+    imu.csv        every /rcm/imu/state sample (~100 Hz): orientation, relative, angles, accel, gyro
     events.csv     protocol marks (payload, hold_start, top, failure, ...) with JSON data
     meta.json      protocol, params, notes, geometry/calibration, result, timing
 """
@@ -22,7 +23,10 @@ import time
 import traceback
 from pathlib import Path
 
+import signal
+
 import rclpy
+from rclpy.executors import ExternalShutdownException
 import yaml
 from ament_index_python.packages import get_package_share_directory
 from rclpy.callback_groups import ReentrantCallbackGroup
@@ -32,7 +36,7 @@ from rclpy.qos import DurabilityPolicy, QoSProfile
 from std_msgs.msg import String
 from std_srvs.srv import Trigger
 
-from rcm_msgs.msg import ArmState, BendCommand, BendState, TendonGoal
+from rcm_msgs.msg import ArmState, BendCommand, BendState, ImuState, TendonGoal
 from rcm_msgs.srv import Respond, SetZero, StartTest
 
 from .context import Aborted, ProtocolError, TestContext, Tripped
@@ -131,6 +135,25 @@ class RosContext(TestContext):
             time.sleep(0.05)
         raise ProtocolError("kinematics did not publish new calibration")
 
+    def imu(self):
+        m = self.n.imu
+        if m is None or m.state != "ok":
+            return None
+        return {"tilt": m.tilt_from_ref_deg, "roll": m.roll_deg, "pitch": m.pitch_deg,
+                "has_ref": m.has_reference, "age_s": time.monotonic() - self.n.imu_rx}
+
+    def imu_set_reference(self):
+        cli = self.n.imu_ref_cli
+        if not cli.wait_for_service(timeout_sec=2.0):
+            return False
+        fut = cli.call_async(Trigger.Request())
+        done = threading.Event()
+        fut.add_done_callback(lambda _f: done.set())
+        return done.wait(3.0) and bool(fut.result().success)
+
+    def plot(self, **live):
+        self.n.live = live
+
     def mark(self, event, **data):
         self.n.write_event(event, data)
 
@@ -151,6 +174,10 @@ class Runner(Node):
         self.lock = threading.Lock()
         self.servos: dict[int, dict] = {}
         self.bend_est: BendState | None = None
+        self.imu: ImuState | None = None
+        self.imu_rx = 0.0
+        self.live: dict | None = None         # protocol-provided live plot for the dashboard
+        self.imu_fh = self.imu_w = None
         self.kin_info: dict = {}
         self.trip_reason = ""
         self.cmd = (float("nan"), float("nan"))
@@ -178,8 +205,10 @@ class Runner(Node):
         latched = QoSProfile(depth=1, durability=DurabilityPolicy.TRANSIENT_LOCAL)
         self.create_subscription(ArmState, "/rcm/state", self.on_state, 20, callback_group=cg)
         self.create_subscription(BendState, "/rcm/bend_estimate", self.on_bend, 20, callback_group=cg)
+        self.create_subscription(ImuState, "/rcm/imu/state", self.on_imu, 50, callback_group=cg)
         self.create_subscription(String, "/rcm/kinematics/info", self.on_info, latched, callback_group=cg)
         self.zero_cli = self.create_client(SetZero, "/rcm/set_zero", callback_group=cg)
+        self.imu_ref_cli = self.create_client(Trigger, "/rcm/imu/set_reference", callback_group=cg)
         self.create_service(StartTest, "/rcm/test/start", self.on_start, callback_group=cg)
         self.create_service(Respond, "/rcm/test/respond", self.on_respond, callback_group=cg)
         self.create_service(Trigger, "/rcm/test/abort", self.on_abort, callback_group=cg)
@@ -194,6 +223,19 @@ class Runner(Node):
 
     def on_bend(self, msg: BendState):
         self.bend_est = msg
+
+    @safe
+    def on_imu(self, m: ImuState):
+        self.imu = m
+        self.imu_rx = time.monotonic()
+        with self.file_lock:
+            if self.imu_w is None:
+                return
+            o, r, a, g = m.orientation, m.relative, m.accel, m.gyro
+            self.imu_w.writerow([f"{time.time():.4f}", f"{m.header.stamp.sec + m.header.stamp.nanosec * 1e-9:.4f}",
+                                 m.state, *(f"{x:.6f}" for x in (o.w, o.x, o.y, o.z, r.w, r.x, r.y, r.z)),
+                                 f"{m.roll_deg:.3f}", f"{m.pitch_deg:.3f}", f"{m.tilt_from_ref_deg:.3f}",
+                                 *(f"{x:.4f}" for x in (a.x, a.y, a.z)), *(f"{x:.5f}" for x in (g.x, g.y, g.z))])
 
     @safe
     def on_state(self, msg: ArmState):
@@ -221,12 +263,18 @@ class Runner(Node):
         for i in ids:
             cols += [f"{k}_{i}" for k in ("pos", "goal", "speed", "load", "temp", "volt", "current", "moving", "err")]
         cols += ["est_theta_deg", "est_phi_deg", "tip_x", "tip_y", "tip_z", "common_mm",
-                 "cmd_theta_deg", "cmd_phi_deg", "tripped"]
+                 "cmd_theta_deg", "cmd_phi_deg", "tripped",
+                 "imu_state", "imu_tilt_from_ref_deg", "imu_roll_deg", "imu_pitch_deg"]
         with self.file_lock:
             self.tel_fh = open(d / "telemetry.csv", "w", newline="", buffering=1)
             self.tel = csv.writer(self.tel_fh)
             self.tel.writerow(cols)
             self.tel_ids = ids
+            self.imu_fh = open(d / "imu.csv", "w", newline="", buffering=1)
+            self.imu_w = csv.writer(self.imu_fh)
+            self.imu_w.writerow(["host_t", "stamp", "state", "qw", "qx", "qy", "qz", "rel_w", "rel_x", "rel_y",
+                                 "rel_z", "roll_deg", "pitch_deg", "tilt_from_ref_deg", "ax", "ay", "az",
+                                 "gx", "gy", "gz"])
             self.ev_fh = open(d / "events.csv", "w", newline="", buffering=1)
             self.ev = csv.writer(self.ev_fh)
             self.ev.writerow(["host_t", "elapsed_s", "event", "data"])
@@ -234,10 +282,10 @@ class Runner(Node):
 
     def close_session(self):
         with self.file_lock:
-            for fh in (self.tel_fh, self.ev_fh):
+            for fh in (self.tel_fh, self.ev_fh, self.imu_fh):
                 if fh:
                     fh.close()
-            self.tel = self.ev = self.tel_fh = self.ev_fh = None
+            self.tel = self.ev = self.tel_fh = self.ev_fh = self.imu_fh = self.imu_w = None
 
     def write_telemetry(self, msg: ArmState):
         by = {s.id: s for s in msg.servos}
@@ -253,6 +301,9 @@ class Runner(Node):
         else:
             row += [""] * 6
         row += [f"{math.degrees(self.cmd[0]):.3f}", f"{math.degrees(self.cmd[1]):.3f}", msg.tripped]
+        m = self.imu
+        row += ([m.state, f"{m.tilt_from_ref_deg:.3f}", f"{m.roll_deg:.3f}", f"{m.pitch_deg:.3f}"]
+                if m is not None else ["none", "", "", ""])
         with self.file_lock:
             if self.tel:
                 self.tel.writerow(row)
@@ -330,7 +381,7 @@ class Runner(Node):
             return res
 
         self.abort_flag.clear()
-        self.result, self.logs, self.prompt_obj = None, [], None
+        self.result, self.logs, self.prompt_obj, self.live = None, [], None, None
         self.protocol, self.t_start = req.protocol, time.monotonic()
         sdir = self.open_session(req.protocol)
         self.session_dir = str(sdir)
@@ -403,7 +454,7 @@ class Runner(Node):
         st = {"state": self.state, "protocol": self.protocol, "session_dir": self.session_dir,
               "prompt": self.prompt_obj, "log": self.logs[-40:], "result": self.result,
               "elapsed_s": round(time.monotonic() - self.t_start, 1) if self.t_start else 0,
-              "tripped": self.trip_reason}
+              "tripped": self.trip_reason, "live": self.live}
         self.status_pub.publish(String(data=json.dumps(st, default=str)))
 
 
@@ -414,15 +465,18 @@ def main(args=None):
     ex.add_node(node)
     try:
         ex.spin()
-    except KeyboardInterrupt:
+    except (KeyboardInterrupt, ExternalShutdownException):
         pass
     finally:
+        signal.signal(signal.SIGINT, signal.SIG_IGN)   # 2nd SIGINT (from ros2 launch) must not cut cleanup short
         node.closing = True
         node.abort_flag.set()
         node.close_session()
-        node.destroy_node()
-        if rclpy.ok():
-            rclpy.shutdown()
+        try:
+            node.destroy_node()
+        except Exception:  # noqa: BLE001
+            pass
+        rclpy.try_shutdown()
 
 
 if __name__ == "__main__":

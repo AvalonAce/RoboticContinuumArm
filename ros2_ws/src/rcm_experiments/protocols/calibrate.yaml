@@ -1,10 +1,17 @@
 protocol: calibrate
 description: >
-  Pretension all three tendons together until each reaches load_threshold above idle,
-  then store that straight pose as the calibration zero. Run first, and after any
-  re-tensioning or winch change.
+  Find the straight, pretensioned pose and store it as the calibration zero.
+  mode auto = servos reel in until load rises (load signal is coarse, ~24-unit steps);
+  mode manual = you reel each tendon in from the prompt until it feels taut (most reliable for now).
+  Run first, and after any re-tensioning or winch change.
 params:
-  step_counts: 6          # reel-in per step (~0.09 mm at r=10 mm)
-  load_threshold: 60      # |load| rise above idle that counts as "taut"
-  max_travel_counts: 1200 # abort if a tendon hasn't gone taut by then
+  mode: manual            # manual | auto
+  step_counts: 6          # auto: reel-in per step (~0.1 mm at r=11 mm)
+  # Estimate: 10 N x 0.011 m = 0.11 N.m ~ 3.7% of 30 kg.cm -> rise ~37. The servo's own moving/holding
+  # effort reads 24-72, so use a larger rise until measured (hang 1 L water bottle = ~10 N, note load).
+  load_threshold: 60      # auto: |load| rise above the moving baseline that counts as taut
+  free_steps: 5           # auto: first N steps (through slack) set the baseline
+  confirm_steps: 3        # auto: rise must hold this many consecutive steps
+  max_travel_counts: 1200 # abort if a tendon travels further than this (~20 mm of line)
   speed: 150
+  sample_s: 0.3

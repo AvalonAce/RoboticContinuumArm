@@ -12,5 +12,6 @@
   <exec_depend>rcm_kinematics</exec_depend>
   <exec_depend>rcm_experiments</exec_depend>
   <exec_depend>rcm_dashboard</exec_depend>
+  <exec_depend>rcm_sensors</exec_depend>
   <export><build_type>ament_cmake</build_type></export>
 </package>

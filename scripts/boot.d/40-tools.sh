@@ -27,6 +27,12 @@ rcm_cmd_rest() {
 }
 rcm_register rest "move servos to winding rest pose and hold (no ROS needed)"
 
+rcm_cmd_spool() {
+  if _rcm_port_busy; then echo "port busy — stop the ROS stack / serial console first"; return 1; fi
+  python3 "${RCM_TOOLS}/spool.py" "$@"
+}
+rcm_register spool "keyboard spooling: 1/2/3 select, hold A/D to spin, W/S speed, Q quit"
+
 rcm_cmd_py() {
   if _rcm_port_busy; then echo "port busy — close the serial console first"; return 1; fi
   python3 -i -c "from rcm_serial import *; arm = RCM(verbose=True); print('arm ready: ids', arm.ids, '| arm.close() when done')"

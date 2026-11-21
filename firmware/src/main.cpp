@@ -9,6 +9,8 @@
 //   torque <id> <0|1>         disable / enable torque
 //   pos <id> <0-4095> [spd] [acc]   move to raw position
 //   sync <spd> <acc> <id> <pos> [<id> <pos>...]  simultaneous move (SyncWrite)
+//   wheel <id> <speed> [acc]  continuous rotation (signed counts/s, 0 = stop); switches to wheel mode
+//   posmode <id>              stop, hold current angle, back to position mode
 //   read <id>                 pos, speed, load, voltage, temp, current, moving
 //   stream <id|all> <hz>      continuous CSV telemetry, `stream off` to stop
 //   stop                      torque off on all scanned IDs (soft e-stop)
@@ -91,7 +93,7 @@ static void handleLine(String line) {
   String s(cmd);
 
   if (s == "help") {
-    Serial.println("scan | baudscan | setid o n | zero id | torque id 0/1 | pos id p [spd] [acc] | sync spd acc id p [id p..] | read id | stream id|all hz | stream off | stop");
+    Serial.println("scan | baudscan | wheel id spd | posmode id | setid o n | zero id | torque id 0/1 | pos id p [spd] [acc] | sync spd acc id p [id p..] | read id | stream id|all hz | stream off | stop");
   } else if (s == "scan") {
     doScan();
   } else if (s == "baudscan") {
@@ -131,6 +133,21 @@ static void handleLine(String line) {
     if (k == 0) { Serial.println("ERR: sync spd acc id pos [id pos ...]"); return; }
     st.SyncWritePosEx(ids, k, ps, sp, ac);
     Serial.printf("sync %d servos (spd %d acc %d)\n", k, spd, acc);
+  } else if (s == "wheel" && n >= 3) {
+    // Wheel (constant-speed) mode, for spooling tendons. Mode write isn't saved to EEPROM:
+    // a power cycle returns the servo to position mode.
+    int acc = (n >= 4) ? c : 50;
+    st.WheelMode(a);
+    st.EnableTorque(a, 1);
+    st.WriteSpe(a, constrain(b, -3400, 3400), acc);
+    Serial.printf("wheel %d %d\n", a, b);
+  } else if (s == "posmode" && n >= 2) {
+    st.WriteSpe(a, 0, 0);
+    delay(20);
+    int pos = (st.FeedBack(a) != -1) ? st.ReadPos(-1) : -1;
+    if (pos >= 0) st.writeWord(a, SMS_STS_GOAL_POSITION_L, pos);   // goal = here, so no jump
+    st.writeByte(a, SMS_STS_MODE, 0);
+    Serial.printf("posmode %d at %d\n", a, pos);
   } else if (s == "read" && n >= 2) {
     printState(a, false);
   } else if (s == "stream") {

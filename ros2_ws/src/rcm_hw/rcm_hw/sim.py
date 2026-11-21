@@ -28,13 +28,14 @@ class FakeBoard:
         #   dropout=t:d  at t s after start, go silent for d s (simulates a dead USB link)
         f = dict(kv.split("=", 1) for kv in os.environ.get("RCM_SIM_FAULTS", "").split(",") if "=" in kv)
         self.corrupt = float(f.get("corrupt", 0))
+        self.drop_reply = float(f.get("dropreply", 0))    # probability a command reply is lost
         self.dropout = tuple(map(float, f["dropout"].split(":"))) if "dropout" in f else None
         self.t_start = time.monotonic()
         rnd = random.Random(seed)
         self.ids = list(ids)
         sign = reel_in_sign or {i: 1 for i in self.ids}
         self.srv = {
-            i: dict(pos=float(1750 + rnd.randint(-40, 40)), goal=None, spd=0.0, torque=False,
+            i: dict(pos=float(1750 + rnd.randint(-40, 40)), goal=None, spd=0.0, torque=False, wheel=0.0,
                     taut=1950 + rnd.randint(-60, 60), sign=sign.get(i, 1), temp=24.0)
             for i in self.ids
         }
@@ -59,8 +60,16 @@ class FakeBoard:
             x ^= ch
         line = f"{body}*{x:02X}"
         if self.corrupt and random.random() < self.corrupt:
+            r = random.random()
+            if r < 0.4:                       # lost newline: glue to the next line (seen on hardware)
+                if not self._silent():
+                    try:
+                        os.write(self.master, line.encode())
+                    except OSError:
+                        pass
+                return
             k = random.randrange(len(line))
-            line = line[:k] + line[k + 1:] if random.random() < 0.5 else line[:k] + "7" + line[k + 1:]
+            line = line[:k] + line[k + 1:] if r < 0.7 else line[:k] + "7" + line[k + 1:]
         self._out(line)
 
     def _out(self, line: str) -> None:
@@ -93,6 +102,9 @@ class FakeBoard:
             dt, last = now - last, now
             with self._lock:
                 for s in self.srv.values():
+                    if s["wheel"] and s["torque"]:                       # wheel mode: spin, wrap 0..4095
+                        s["pos"] = (s["pos"] + s["wheel"] * dt) % 4096
+                        continue
                     if s["goal"] is not None and s["torque"]:
                         d = s["goal"] - s["pos"]
                         step = s["spd"] * dt
@@ -103,7 +115,8 @@ class FakeBoard:
                     total = sum(abs(self._load(s)) for s in self.srv.values())
                     volt = int(round(124 - total / 300))
                     for i, s in self.srv.items():
-                        mv = int(s["goal"] is not None and s["torque"] and abs(s["goal"] - s["pos"]) > 0.5)
+                        mv = int((s["goal"] is not None and s["torque"] and abs(s["goal"] - s["pos"]) > 0.5)
+                                 or (s["wheel"] != 0 and s["torque"]))
                         ld = self._load(s)
                         self._tel(f"{int(now * 1000)},{i},{round(s['pos'])},{int(s['spd']) if mv else 0},"
                                   f"{ld},{volt},{int(s['temp'])},{abs(ld) // 2},{mv}")
@@ -145,7 +158,8 @@ class FakeBoard:
                     if i in self.srv:
                         self.srv[i].update(goal=max(0, min(4095, p)), spd=spd, torque=True)
                         n += 1
-                self._out(f"sync {n} servos (spd {int(spd)} acc {t[2]})")
+                if not (self.drop_reply and random.random() < self.drop_reply):
+                    self._out(f"sync {n} servos (spd {int(spd)} acc {t[2]})")
             elif c == "pos" and len(t) >= 3:
                 i, p = int(t[1]), int(t[2])
                 spd = float(t[3]) if len(t) > 3 else 1000.0
@@ -161,8 +175,31 @@ class FakeBoard:
                 self._out(f"torque {i} = {int(on)}")
             elif c == "stop":
                 for s in self.srv.values():
-                    s["torque"], s["goal"] = False, None
+                    s["torque"], s["goal"], s["wheel"] = False, None, 0.0
                 self._out("all torque off")
+            elif c == "wheel" and len(t) >= 3:
+                i, v = int(t[1]), float(t[2])
+                if i in self.srv:
+                    self.srv[i].update(wheel=v, torque=True, goal=None)
+                self._out(f"wheel {i} {int(v)}")
+            elif c == "posmode" and len(t) >= 2:
+                i = int(t[1])
+                pos = -1
+                if i in self.srv:
+                    sv = self.srv[i]
+                    sv["wheel"] = 0.0
+                    pos = int(round(sv["pos"]))
+                    sv["goal"] = pos
+                self._out(f"posmode {i} at {pos}")
+            elif c == "zero" and len(t) >= 2:
+                i = int(t[1])
+                if i in self.srv:                     # encoder offset: current angle reads 2048
+                    sv = self.srv[i]
+                    d = 2048 - sv["pos"]
+                    sv["pos"], sv["taut"] = 2048.0, sv["taut"] + d
+                    if sv["goal"] is not None:
+                        sv["goal"] += d
+                self._out(f"zeroed {i} (current pos = 2048)")
             elif c == "help":
                 self._out("scan | sync | pos | torque | stream | stop  (simulated)")
             else:
