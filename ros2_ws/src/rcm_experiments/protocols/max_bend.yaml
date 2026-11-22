@@ -8,7 +8,7 @@ params:
   target_deg: 90          # stop when IMU tilt-from-straight reaches this
   step_counts: 15         # ~0.25 mm of line per step
   release_ratio: 0.5      # others pay out this x the pull (CC model: 1 : 1/2 : 1/2). 0 = hold, 1 = equal
-  max_travel_counts: 1800 # hard stop (~30 mm)
+  max_travel_counts: 1990 # hard stop (~33.6 mm); servo soft limit is 50 counts from the end (2048-50=1998)
   load_limit: 700         # stop if any |load| reaches this (bridge trips at 900)
   speed: 150
   sample_s: 0.3

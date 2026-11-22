@@ -1,0 +1,13 @@
+protocol: grasp_trials
+description: >
+  Manipulator grasp trials (Manipulator tab). Operator-driven checklist: start -> grasp (GRASPED/FAILED) ->
+  timed hold (DROPPED/SLIPPED buttons, otherwise success) -> release. Success = grasped and held hold_s.
+  The arm/gripper are driven by the team's control code; this logs every stream + results.csv/summary.csv.
+params:
+  object: ""              # object name (set by the Manipulator tab)
+  object_size_mm: ""
+  object_mass_g: 0
+  trials: 5
+  hold_s: 10
+  label: ""               # condition tag (e.g. "rigid base, fin-ray v2")
+  zero_imu_each_trial: true

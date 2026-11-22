@@ -79,8 +79,14 @@ class FlexBridge(Node):
         p = self.declare_parameter
         self.port_param = p("port", "").value
         self.sim = p("sim", False).value
-        self.channels = [int(c) for c in p("flex_channels", [0, 1]).value]     # 0=A2 1=A3 2=TX
-        labels = list(p("flex_names", ["flex1 tip", "flex2 mid"]).value)
+        self.channels = [int(c) for c in p("flex_channels", [0, 1, 2]).value]  # 0=A2 1=A3 2=TX
+        labels = list(p("flex_names", ["flex1 tip", "flex2 mid", "flex3 base"]).value)
+        # where each sensor sits along the bendable length (cm from the base) -> whole-arm bend estimate
+        self.length_cm = float(p("bend_length_cm", 27.0).value)
+        fr = [float(x) for x in p("flex_from_cm", [16.0, 5.0, 0.0]).value]
+        to = [float(x) for x in p("flex_to_cm", [27.0, 16.0, 10.5]).value]
+        self.spans = [(fr[k], to[k]) if k < len(fr) and k < len(to) and to[k] > fr[k] else (float("nan"), float("nan"))
+                      for k in range(len(self.channels))]
         self.names = [f"{labels[k] if k < len(labels) else f'flex{k + 1}'} ({PIN_NAMES[c]})"
                       for k, c in enumerate(self.channels)]
         self.r_fixed = float(p("flex_r_fixed_ohm", 10000.0).value)
@@ -143,19 +149,30 @@ class FlexBridge(Node):
         return 90.0 * (r - r0) / (r90 - r0), "r_90" in cal
 
     def _recent_r(self) -> list[float | None]:
+        """Mean resistance over the last ~0.5 s per channel; None if no data or no sensor (~0 V)."""
         with self.lock:
-            return [self.resistance(sum(v) / len(v)) if v else None for v in self.recent]
+            out = []
+            for v in self.recent:
+                mv = sum(v) / len(v) if v else None
+                out.append(self.resistance(mv) if mv is not None and mv >= 0.15 else None)
+            return out
 
     def on_set_flat(self, _req, res: Trigger.Response):
         rs = self._recent_r()
-        if any(r is None for r in rs):
+        if all(r is None for r in rs):
             res.success, res.message = False, "no flex data -- board connected?"
             return res
-        for c, r in zip(self.channels, rs):
+        done, skipped = [], []
+        for n, c, r in zip(self.names, self.channels, rs):
+            if r is None:
+                skipped.append(n)
+                continue
             self.cal.setdefault(c, {})["r_flat"] = r
+            done.append(f"{n} {r / 1000:.1f} kOhm")
         self._save_cal()
         res.success = True
-        res.message = "flat (0 deg) set: " + ", ".join(f"{n} {r / 1000:.1f} kOhm" for n, r in zip(self.names, rs))
+        res.message = "flat (0 deg) set: " + ", ".join(done) + \
+                      (f"; not connected (skipped): {', '.join(skipped)}" if skipped else "")
         self.notice(res.message)
         return res
 
@@ -251,19 +268,50 @@ class FlexBridge(Node):
         if all(v is None for v in vals):
             return                                       # nothing new this tick
         m.state = "sim" if self.sim else "ok"
-        for c, v in zip(self.channels, vals):
+        missing = []
+        for n, c, v in zip(self.names, self.channels, vals):
             v = v if v is not None else float("nan")
+            if v == v and v < 0.15:                     # ~0 V: no sensor / 3V side open on this channel
+                missing.append(n)
+                r = a = float("nan")
+                ok = False
+                m.volts.append(float(v))
+                m.resistance_ohm.append(r)
+                m.angle_deg.append(a)
+                m.calibrated.append(ok)
+                continue
             r = self.resistance(v) if v == v else float("nan")
             a, ok = self.angle(c, r) if r == r else (float("nan"), False)
             m.volts.append(float(v))
             m.resistance_ohm.append(float(r))
             m.angle_deg.append(float(a))
             m.calibrated.append(ok)
-        if any(c not in self.cal for c in self.channels):
+        m.from_cm = [float(a) for a, _ in self.spans]
+        m.to_cm = [float(b) for _, b in self.spans]
+        m.length_cm = self.length_cm
+        m.total_deg, m.covered_cm = self.whole_arm(list(m.angle_deg))
+        if missing:
+            m.message = "not connected: " + ", ".join(missing)
+        elif any(c not in self.cal for c in self.channels):
             m.message = "press Set flat with the arm straight"
         elif not all(m.calibrated):
             m.message = "90 deg point estimated -- bend to 90 and press Set 90 to calibrate"
         self.pub.publish(m)
+
+    def whole_arm(self, angles: list[float], dx: float = 0.25) -> tuple[float, float]:
+        """Integrate curvature along the bendable length. Each sensor's angle is spread evenly over its span
+        (deg/cm); where spans overlap the curvatures are averaged, so overlap is not double-counted.
+        Uncovered length contributes nothing (reported via covered_cm)."""
+        n = int(round(self.length_cm / dx))
+        total, covered = 0.0, 0
+        for i in range(n):
+            x = (i + 0.5) * dx
+            ks = [a / (b - f) for a, (f, b) in zip(angles, self.spans)
+                  if a == a and f == f and f <= x < b]
+            if ks:
+                total += sum(ks) / len(ks) * dx
+                covered += 1
+        return (float(total) if covered else float("nan")), covered * dx
 
     # ---------------- simulation ----------------
     def on_bend(self, b: BendState) -> None:
@@ -272,8 +320,8 @@ class FlexBridge(Node):
     def sim_tick(self) -> None:
         r0 = 10000.0
         mv = [0, 0, 0]
-        share = self.sim_theta / max(1, len(self.channels))     # each sensor sees its share of the bend
-        for c in self.channels:
+        for c, (f, b) in zip(self.channels, self.spans):          # constant curvature: angle ~ sensor length
+            share = self.sim_theta * ((b - f) / self.length_cm if b == b else 0.0)
             r = r0 * (1 + share / 90.0) * (1 + 0.003 * math.sin(time.monotonic() * 7 + c))
             mv[c] = int(1000 * self.vcc * self.r_fixed / (self.r_fixed + r))
         self.last_flex = time.monotonic()

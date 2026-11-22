@@ -9,6 +9,7 @@ Pub  /rcm/test/status   std_msgs/String      JSON status (5 Hz + on change)
 Each run writes   <data_dir>/<YYYYmmdd_HHMMSS>_<stem>/
     telemetry.csv  one row per /rcm/state sample (all servos, bend estimate, command, latest IMU angles)
     imu.csv        every /rcm/imu/state sample (~100 Hz): orientation, relative, angles, accel, gyro
+    flex.csv       every /rcm/flex/state sample (~25 Hz): per sensor volts / kOhm / angle, whole-arm total
     events.csv     protocol marks (payload, hold_start, top, failure, ...) with JSON data
     meta.json      protocol, params, notes, geometry/calibration, result, timing
 """
@@ -36,7 +37,8 @@ from rclpy.qos import DurabilityPolicy, QoSProfile
 from std_msgs.msg import String
 from std_srvs.srv import Trigger
 
-from rcm_msgs.msg import ArmState, BendCommand, BendState, ImuState, TendonGoal
+from .context import TIMEOUT
+from rcm_msgs.msg import ArmState, BendCommand, BendState, FlexState, ImuState, TendonGoal
 from rcm_msgs.srv import Respond, SetZero, StartTest
 
 from .context import Aborted, ProtocolError, TestContext, Tripped
@@ -105,14 +107,18 @@ class RosContext(TestContext):
     def _send_raw(self, targets, speed):
         self.n.goal_pub.publish(TendonGoal(ids=list(targets), positions=list(targets.values()), speed=speed))
 
-    def _ask(self, text, kind, default):
+    def _ask(self, text, kind, default, timeout=None, choices=None):
         n = self.n
         n.answer_evt.clear()
-        n.prompt_obj = {"text": text, "kind": kind, "default": default}
+        n.prompt_obj = {"text": text, "kind": kind, "default": default, "choices": choices,
+                        "until": (time.time() + timeout) if timeout else None}
         n.set_state("prompt")
+        end = time.monotonic() + timeout if timeout else None
         try:
             while not n.answer_evt.wait(0.05):
                 self.check()
+                if end is not None and time.monotonic() >= end:
+                    return TIMEOUT
             return n.answer
         finally:
             n.prompt_obj = None
@@ -142,6 +148,14 @@ class RosContext(TestContext):
         return {"tilt": m.tilt_from_ref_deg, "roll": m.roll_deg, "pitch": m.pitch_deg,
                 "has_ref": m.has_reference, "age_s": time.monotonic() - self.n.imu_rx}
 
+    def flex(self):
+        m = self.n.flex
+        if m is None or m.state not in ("ok", "sim") or time.monotonic() - self.n.flex_rx > 1.0:
+            return None
+        f = lambda x: None if x != x else round(float(x), 2)  # noqa: E731
+        return {"names": list(m.names), "angles": [f(a) for a in m.angle_deg], "volts": [f(v) for v in m.volts],
+                "total": f(m.total_deg)}
+
     def imu_set_reference(self):
         cli = self.n.imu_ref_cli
         if not cli.wait_for_service(timeout_sec=2.0):
@@ -153,6 +167,19 @@ class RosContext(TestContext):
 
     def plot(self, **live):
         self.n.live = live
+
+    def save_table(self, name, rows):
+        if not self.n.session_dir or not rows:
+            return
+        cols = []
+        for r in rows:
+            cols += [k for k in r if k not in cols]
+        tmp = Path(self.n.session_dir) / (name + ".tmp")
+        with open(tmp, "w", newline="") as fh:
+            w = csv.DictWriter(fh, fieldnames=cols)
+            w.writeheader()
+            w.writerows(rows)
+        tmp.replace(Path(self.n.session_dir) / name)
 
     def mark(self, event, **data):
         self.n.write_event(event, data)
@@ -178,6 +205,10 @@ class Runner(Node):
         self.imu_rx = 0.0
         self.live: dict | None = None         # protocol-provided live plot for the dashboard
         self.imu_fh = self.imu_w = None
+        self.flex: FlexState | None = None
+        self.flex_rx = 0.0
+        self.flex_dir: Path | None = None          # session folder; flex.csv opens on the first sample
+        self.flex_fh = self.flex_w = None
         self.kin_info: dict = {}
         self.trip_reason = ""
         self.cmd = (float("nan"), float("nan"))
@@ -206,6 +237,7 @@ class Runner(Node):
         self.create_subscription(ArmState, "/rcm/state", self.on_state, 20, callback_group=cg)
         self.create_subscription(BendState, "/rcm/bend_estimate", self.on_bend, 20, callback_group=cg)
         self.create_subscription(ImuState, "/rcm/imu/state", self.on_imu, 50, callback_group=cg)
+        self.create_subscription(FlexState, "/rcm/flex/state", self.on_flex, 20, callback_group=cg)
         self.create_subscription(String, "/rcm/kinematics/info", self.on_info, latched, callback_group=cg)
         self.zero_cli = self.create_client(SetZero, "/rcm/set_zero", callback_group=cg)
         self.imu_ref_cli = self.create_client(Trigger, "/rcm/imu/set_reference", callback_group=cg)
@@ -236,6 +268,36 @@ class Runner(Node):
                                  m.state, *(f"{x:.6f}" for x in (o.w, o.x, o.y, o.z, r.w, r.x, r.y, r.z)),
                                  f"{m.roll_deg:.3f}", f"{m.pitch_deg:.3f}", f"{m.tilt_from_ref_deg:.3f}",
                                  *(f"{x:.4f}" for x in (a.x, a.y, a.z)), *(f"{x:.5f}" for x in (g.x, g.y, g.z))])
+
+    @safe
+    def on_flex(self, m: FlexState):
+        self.flex = m
+        self.flex_rx = time.monotonic()
+        with self.file_lock:
+            if self.flex_dir is None:
+                return
+            n = len(m.names)
+            if self.flex_w is None:                    # header needs the sensor names: open on first sample
+                self.flex_fh = open(self.flex_dir / "flex.csv", "w", newline="", buffering=1)
+                self.flex_w = csv.writer(self.flex_fh)
+                tags = [nm.split(" (")[0].replace(" ", "_") for nm in m.names]
+                cols = ["host_t", "stamp", "state", "total_deg", "covered_cm"]
+                for t in tags:
+                    cols += [f"{t}_v", f"{t}_kohm", f"{t}_deg", f"{t}_cal"]
+                self.flex_w.writerow(cols)
+                self.flex_n = n
+            if n != self.flex_n:
+                return
+            g = lambda x, fmt: "" if x != x else format(x, fmt)  # noqa: E731
+            row = [f"{time.time():.4f}", f"{m.header.stamp.sec + m.header.stamp.nanosec * 1e-9:.4f}", m.state,
+                   g(m.total_deg, ".2f"), g(m.covered_cm, ".1f")]
+            for k in range(n):
+                v = m.volts[k] if k < len(m.volts) else float("nan")
+                r = m.resistance_ohm[k] if k < len(m.resistance_ohm) else float("nan")
+                a = m.angle_deg[k] if k < len(m.angle_deg) else float("nan")
+                c = m.calibrated[k] if k < len(m.calibrated) else False
+                row += [g(v, ".4f"), g(r / 1000.0, ".3f"), g(a, ".2f"), int(bool(c))]
+            self.flex_w.writerow(row)
 
     @safe
     def on_state(self, msg: ArmState):
@@ -275,6 +337,7 @@ class Runner(Node):
             self.imu_w.writerow(["host_t", "stamp", "state", "qw", "qx", "qy", "qz", "rel_w", "rel_x", "rel_y",
                                  "rel_z", "roll_deg", "pitch_deg", "tilt_from_ref_deg", "ax", "ay", "az",
                                  "gx", "gy", "gz"])
+            self.flex_dir = d
             self.ev_fh = open(d / "events.csv", "w", newline="", buffering=1)
             self.ev = csv.writer(self.ev_fh)
             self.ev.writerow(["host_t", "elapsed_s", "event", "data"])
@@ -282,10 +345,11 @@ class Runner(Node):
 
     def close_session(self):
         with self.file_lock:
-            for fh in (self.tel_fh, self.ev_fh, self.imu_fh):
+            for fh in (self.tel_fh, self.ev_fh, self.imu_fh, self.flex_fh):
                 if fh:
                     fh.close()
             self.tel = self.ev = self.tel_fh = self.ev_fh = self.imu_fh = self.imu_w = None
+            self.flex_fh = self.flex_w = self.flex_dir = None
 
     def write_telemetry(self, msg: ArmState):
         by = {s.id: s for s in msg.servos}

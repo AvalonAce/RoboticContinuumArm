@@ -14,7 +14,8 @@ Keys
   Z          zero the turn counter
   Q          quit (all servos back to position mode, then limp)
 
-Safety: stops if |load| stays above --load-limit (line taut / snag), and on release (dead-man).
+Safety: stops if the load against the spin direction stays above --load-limit (reeling into a taut line /
+snag; letting line out under tension is allowed), and on key release (dead-man).
 The servo spins in wheel mode only while you spool; it is put back in position mode afterwards.
 After spooling: dashboard -> Go to rest -> final slack/tie-off -> Calibrate.
 """
@@ -166,7 +167,9 @@ def main() -> int:
                             turns_counts[i] += dp
                         last_pos[i] = p
                 s = snap.get(sel)
-                if s and spinning and abs(s.load) > a.load_limit:
+                # only stop when the servo strains IN the spin direction (reeling against a taut line / snag);
+                # letting line out under tension reads a big load of the opposite sign and must be allowed
+                if s and spinning and spinning * s.load > a.load_limit:
                     over += 1
                     if over >= 5:
                         stop()

@@ -18,6 +18,9 @@ class Tripped(Exception):
     """Bridge safety trip (load/temp/e-stop). Torque is off."""
 
 
+TIMEOUT = "__timeout__"          # returned by prompt() when its timeout passes unanswered
+
+
 class ProtocolError(Exception):
     """Protocol cannot continue (bad params, hardware not behaving as expected)."""
 
@@ -42,7 +45,7 @@ class TestContext:
     def _send_raw(self, targets: dict[int, int], speed: int) -> None:
         raise NotImplementedError
 
-    def _ask(self, text: str, kind: str, default) -> str:
+    def _ask(self, text: str, kind: str, default, timeout=None, choices=None) -> str:
         """Block until operator answers (must call self.check() while waiting)."""
         raise NotImplementedError
 
@@ -59,9 +62,16 @@ class TestContext:
         """Latest tip-IMU reading {tilt, roll, pitch, has_ref, age_s} or None if offline/calibrating."""
         return None
 
+    def flex(self) -> dict | None:
+        """Latest flex reading {names, angles, volts, total} or None if the flex board is offline."""
+        return None
+
     def imu_set_reference(self) -> bool:
         """Current IMU pose becomes the 'straight' reference. True on success."""
         return False
+
+    def save_table(self, name: str, rows: list[dict]) -> None:
+        """(Re)write <session>/<name> as CSV from a list of flat dicts (results tables)."""
 
     def plot(self, **live) -> None:
         """Live plot for the dashboard: plot(title=, x_label=, y_label=, series={name: [[x, y], ...]}, summary=)."""
@@ -100,10 +110,15 @@ class TestContext:
         self.check()
         self._send_raw({int(k): int(v) for k, v in targets.items()}, int(speed))
 
-    def prompt(self, text: str, kind: str = "confirm", default=None) -> str:
-        """kind: confirm | number | text. Returns the operator's answer string."""
-        self.mark("prompt", text=text, kind=kind)
-        ans = self._ask(text, kind, default)
+    def prompt(self, text: str, kind: str = "confirm", default=None, timeout: float | None = None,
+               choices: list[str] | None = None) -> str:
+        """kind: confirm | number | text | choice (buttons = `choices`). Returns the operator's answer string,
+        or TIMEOUT if `timeout` s pass with no answer."""
+        self.mark("prompt", text=text, kind=kind, choices=choices, timeout=timeout)
+        ans = self._ask(text, kind, default, timeout, choices)
+        if ans == TIMEOUT:
+            self.mark("prompt_timeout")
+            return ans
         if kind == "number":
             try:
                 float(ans)

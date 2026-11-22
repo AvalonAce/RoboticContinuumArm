@@ -27,7 +27,7 @@ async function api(action, body = {}) {
 let testBusy = false, armConnected = false;
 function syncButtons() {
   const lock = inflight > 0 || testBusy || !armConnected;
-  for (const id of ["b-start", "b-home", "b-rest", "b-mb"]) $(id).disabled = lock;
+  for (const id of ["b-start", "b-home", "b-rest", "b-mb", "b-cal", "b-fb", "b-gt"]) $(id).disabled = lock;
   for (const id of ["b-send", "b-straight"]) $(id).disabled = testBusy || !armConnected;
 }
 function toast(msg, bad = false) {
@@ -173,6 +173,9 @@ function drawLive(L) {
   liveKey = key;
   $("t-live-title").textContent = L.title || "live";
   $("t-live-sum").textContent = L.summary || "";
+  const hasSeries = Object.keys(L.series || {}).length > 0;
+  $("t-live-c").style.display = hasSeries ? "" : "none";      // e.g. grasp trials: summary only, no curve
+  if (!hasSeries) return;
   const c = $("t-live-c"), dpr = window.devicePixelRatio || 1, W = c.clientWidth, H = c.clientHeight;
   c.width = W * dpr; c.height = H * dpr;
   const g = c.getContext("2d"); g.setTransform(dpr, 0, 0, dpr, 0, 0); g.clearRect(0, 0, W, H);
@@ -207,6 +210,9 @@ function drawLive(L) {
 
 function renderTest(t) {
   if (!t || !t.state) return;
+  renderFinal(t);
+  renderGrasp(t);
+  renderHold(t);
   drawLive(t.live);
   const busy = ["running", "prompt"].includes(t.state);
   if (busy !== testBusy) { testBusy = busy; syncButtons(); }
@@ -225,11 +231,18 @@ function renderTest(t) {
     box.classList.toggle("hidden", !p);
     $("c-prompt").classList.toggle("hidden", !p);
     if (p) {
-      showTab("tests");
+      if (!["final", "manip"].includes(curTab())) showTab("tests");
       box.scrollIntoView({ behavior: "smooth", block: "center" });     // bring the question on screen
       box.classList.remove("flash"); void box.offsetWidth; box.classList.add("flash");
       toast(`Test is waiting for you: ${p.text.split("\n")[0]}`);
       $("prompt-text").textContent = p.text;
+      const ch = $("prompt-choices"), hasCh = Array.isArray(p.choices) && p.choices.length;
+      ch.classList.toggle("hidden", !hasCh);
+      $("prompt-row").classList.toggle("hidden", !!hasCh);
+      ch.innerHTML = hasCh ? p.choices.map((c, k) =>
+        `<button class="btn ${k === 0 ? "primary" : ""} choice" data-v="${c}">${c.toUpperCase()}</button>`).join("") : "";
+      ch.querySelectorAll("button").forEach((b) => (b.onclick = () => api("test/respond", { value: b.dataset.v })));
+      if (hasCh) { ch.querySelector("button").focus(); return; }
       const inp = $("prompt-in");
       inp.style.display = p.kind === "confirm" ? "none" : "";
       inp.type = p.kind === "number" ? "number" : "text";
@@ -255,7 +268,9 @@ function renderFlex(f, now) {
   }
   let sum = 0, nsum = 0;
   sens.forEach((x, k) => {
-    $(`fx-n${k}`).innerHTML = `${x.name}<small>${x.v === null ? "–" : x.v.toFixed(2)} V · ${x.r_k === null ? "–" : x.r_k.toFixed(1)} kΩ</small>`;
+    const span = x.from !== null && x.to !== null ? ` · ${x.from}–${x.to} cm` : "";
+    const nc = x.v !== null && x.v < 0.15;
+    $(`fx-n${k}`).innerHTML = `${x.name}<small>${nc ? "not connected" : `${x.v === null ? "–" : x.v.toFixed(2)} V · ${x.r_k === null ? "–" : x.r_k.toFixed(1)} kΩ`}${span}</small>`;
     const a = $(`fx-a${k}`);
     a.textContent = x.angle === null ? "–" : `${x.angle.toFixed(0)}°`;
     a.classList.toggle("est", x.angle !== null && !x.cal);
@@ -263,10 +278,15 @@ function renderFlex(f, now) {
     $(`fx-b${k}`).style.width = `${Math.max(0, Math.min(1, (x.angle || 0) / FLEX_MAX)) * 100}%`;
     if (x.angle !== null) { sum += x.angle; nsum++; }
   });
-  $("flex-sum").textContent = nsum ? `tip section ${sum.toFixed(0)}° (base not covered)` : "";
+  const imuT = last && last.imu && last.imu.tilt;
+  const cov = !stale && f.length_cm ? ` (${f.covered_cm}/${f.length_cm} cm)` : "";
+  $("flex-sum").textContent = (!stale && f.total !== null && nsum ? `whole arm ${f.total.toFixed(0)}° flex${cov}` : "") +
+    (imuT !== null && imuT !== undefined ? ` · IMU ${imuT.toFixed(0)}°` : "");
 }
 
+let clockSkew = 0;                       // browser clock - server clock (s)
 function render(d) {
+  if (d.now) clockSkew = Date.now() / 1000 - d.now;
   last = d;
   if (d.info && Object.keys(d.info).length) {
     info = d.info;
@@ -299,6 +319,7 @@ function render(d) {
   renderTest(d.test);
   renderImu(d.imu, d.now);
   renderFlex(d.flex, d.now);
+  renderCal(d.arm);
   for (const n of d.notices || []) {
     if (lastNotice !== null && n.n > lastNotice) toast(n.text, true);
   }
@@ -332,7 +353,7 @@ async function loadProtocols() {
   if (!j.ok) return;
   protocols = j.protocols;
   const sel = $("proto"), cur = sel.value;
-  sel.innerHTML = Object.keys(protocols).filter((k) => !["calibrate", "max_bend"].includes(k)).map((k) => `<option>${k}</option>`).join("");
+  sel.innerHTML = Object.keys(protocols).filter((k) => !["calibrate", "max_bend", "final_bend", "grasp_trials"].includes(k)).map((k) => `<option>${k}</option>`).join("");
   if (cur && protocols[cur]) sel.value = cur;
   fillProto();
 }
@@ -348,10 +369,11 @@ $("b-start").onclick = async () => {
 };
 $("b-imu-ref").onclick = () => api("imu/set_reference").then((j) => j.ok && toast(j.message));
 $("b-imu-cal").onclick = () => api("imu/calibrate_gyro").then((j) => j.ok && toast(j.message));
-$("b-rest").onclick = () => api("rest").then((j) => j.ok && toast(j.message));
+$("b-rest").onclick = () => { calReset(); api("rest").then((j) => j.ok && toast(j.message)); };
 $("b-home").onclick = async () => {
   if (!confirm("Save the CURRENT motor positions as home?\n\nEach servo's encoder is re-centred here (no motion) and the arm holds this pose. Make sure the tendons are tensioned and the arm is straight.")) return;
   const j = await api("set_home");
+  calReset();
   if (j.ok) toast(j.message);
 };
 $("b-mb").onclick = async () => {
@@ -367,7 +389,10 @@ function answer() {
   api("test/respond", { value: p.kind === "confirm" ? "ok" : $("prompt-in").value });
 }
 $("b-answer").onclick = answer;
-$("c-prompt").onclick = () => showTab("tests") || $("prompt").scrollIntoView({ behavior: "smooth", block: "center" });
+$("c-prompt").onclick = () => {
+  if (!["final", "manip"].includes(curTab())) showTab("tests");
+  $("prompt").scrollIntoView({ behavior: "smooth", block: "center" });
+};
 $("prompt-in").addEventListener("keydown", (e) => { if (e.key === "Enter") answer(); });
 
 onSlider();
@@ -377,7 +402,8 @@ setTimeout(loadProtocols, 800);
 // ---------------------------------------------------------------- tabs
 function showTab(name) {
   document.querySelectorAll(".tab").forEach((b) => b.classList.toggle("active", b.dataset.tab === name));
-  document.querySelectorAll("#main > [data-tab]").forEach((el) => el.classList.toggle("hidden", el.dataset.tab !== name));
+  document.querySelectorAll("#main > [data-tab]").forEach((el) =>
+    el.classList.toggle("hidden", !el.dataset.tab.split(" ").includes(name)));
   try { localStorage.setItem("rcm-tab", name); } catch (e) { /* storage unavailable */ }
   liveKey = "";                                   // redraw the protocol plot at its visible size
   window.dispatchEvent(new Event("resize"));      // plots size to the visible column
@@ -386,3 +412,128 @@ document.querySelectorAll(".tab").forEach((b) => (b.onclick = () => showTab(b.da
 try { showTab(localStorage.getItem("rcm-tab") || "control"); } catch (e) { showTab("control"); }
 $("b-flex-flat").onclick = () => api("flex/set_flat").then((j) => j.ok && toast(j.message));
 $("b-flex-90").onclick = () => api("flex/set_90").then((j) => toast(j.message, !j.ok));
+
+// ---------------------------------------------------------------- calibrate: pull / release per tendon
+const calTarget = {};                 // id -> last commanded count, so fast clicks accumulate
+function calReset() { for (const k in calTarget) delete calTarget[k]; }
+$("b-cal").onclick = () => {
+  const p = $("cal-panel"), open = p.classList.toggle("hidden") === false;
+  $("b-cal").textContent = open ? "Calibrate ▴" : "Calibrate ▾";
+  calReset();
+};
+function calNudge(id, dir) {                       // dir +1 = pull (reel in), -1 = release
+  const sv = (last && last.arm && last.arm.servos || []).find((x) => x.id === id);
+  if (!sv) return toast("no servo data", true);
+  const ks = info.ids || ids, k = ks.indexOf(id);
+  const sign = ((info.reel_in_sign || [])[k]) || 1;
+  const base = calTarget[id] !== undefined ? calTarget[id] : (sv.goal >= 0 ? sv.goal : sv.pos);
+  const tgt = Math.round(base + dir * sign * Number($("cal-step").value));
+  calTarget[id] = tgt;
+  api("raw", { id, pos: tgt, speed: 150 });
+}
+function renderCal(arm) {
+  if ($("cal-panel").classList.contains("hidden")) return;
+  const sv = (arm && arm.servos) || [];
+  const box = $("cal-rows");
+  if (box.childElementCount !== sv.length) {
+    box.innerHTML = sv.map((x) => `<div class="cal-row"><b>T${x.id}</b><span class="v" id="cal-v${x.id}"></span>
+      <button class="btn small" data-id="${x.id}" data-dir="-1">− Release</button>
+      <button class="btn small" data-id="${x.id}" data-dir="1">+ Pull</button></div>`).join("");
+    box.querySelectorAll("button").forEach((b) => (b.onclick = () => calNudge(Number(b.dataset.id), Number(b.dataset.dir))));
+  }
+  const ks = info.ids || ids, mmpc = info.mm_per_count || 0.0169;
+  sv.forEach((x) => {
+    const k = ks.indexOf(x.id), z = ((info.zero_counts || [])[k]) ?? 2048, sign = ((info.reel_in_sign || [])[k]) || 1;
+    const d = (x.pos - z) * sign;                  // + = reeled in past home
+    const el = $(`cal-v${x.id}`);
+    el.textContent = `pos ${x.pos} · ${d >= 0 ? "+" : ""}${d} from home (${Math.abs(d * mmpc).toFixed(2)} mm ${d >= 0 ? "in" : "out"})`;
+    el.classList.toggle("off", Math.abs(d) > 5);
+  });
+}
+
+// ---------------------------------------------------------------- final tests
+function curTab() { const a = document.querySelector(".tab.active"); return a ? a.dataset.tab : "control"; }
+$("b-fb").onclick = async () => {
+  const tg = $("fb-targets").value.split(/[ ,;]+/).map(Number).filter((x) => x > 0 && x <= 150);
+  if (!tg.length) return toast("enter target angles, e.g. 30, 60, 75, 90", true);
+  const lab = $("fb-label").value.replace(/"/g, "'");
+  const ov = `targets: [${tg.join(", ")}]\ntrials: ${Number($("fb-trials").value) || 1}\ntendon: ${$("fb-tendon").value}\n` +
+             `hold_s: ${Number($("fb-hold").value) || 5}\nimu_offset_deg: ${Number($("fb-off").value) || 0}\n` +
+             `imu_scale: ${Number($("fb-scale").value) || 1}\nrelease_ratio: ${$("fb-ratio").value}\nlabel: "${lab}"`;
+  const j = await api("test/start", { protocol: "final_bend", overrides: ov, notes: lab });
+  if (j.ok) { toast(`final test started (${tg.length} targets × ${$("fb-trials").value})`); $("fb-table").tBodies[0].innerHTML = ""; }
+};
+let fbKey = "";
+function renderFinal(t) {
+  if (!t || t.protocol !== "final_bend") return;
+  $("fb-dir").textContent = t.session_dir ? t.session_dir.split("/").slice(-1)[0] : "";
+  const rows = (t.live && t.live.table) || [];
+  const key = JSON.stringify(rows);
+  if (key === fbKey) return;
+  fbKey = key;
+  const f = (x, d = 1) => (x === null || x === undefined ? "–" : Number(x).toFixed(d));
+  $("fb-table").tBodies[0].innerHTML = rows.map((r) => `<tr><td>${r.bend}</td><td>${r.trial}</td><td>${f(r.target_deg, 0)}°</td>
+    <td>${f(r.tilt_deg)}°</td><td class="${Math.abs(r.error_deg || 0) > 2 ? "err" : ""}">${f(r.error_deg, 2)}°</td>
+    <td>${r.counts}</td><td>${f(r.mm, 2)}</td><td>${f(r.flex_total_deg)}°</td><td>${f(r.residual_after_return_deg)}°</td>
+    <td class="small">${r.stop === "target reached" ? "ok" : r.stop}</td></tr>`).join("");
+}
+
+// ---------------------------------------------------------------- hold indicator (final tests)
+let holdInfo = null;
+function renderHold(t) {
+  holdInfo = t && t.live && t.live.hold && (t.state === "running" || t.state === "prompt") ? t.live.hold : null;
+  tickHold();
+}
+function tickHold() {
+  const box = $("t-hold");
+  const now = Date.now() / 1000 - clockSkew;
+  const left = holdInfo ? holdInfo.until - now : -1;
+  if (!holdInfo || left <= -0.5) { box.classList.add("hidden"); return; }
+  box.classList.remove("hidden");
+  $("t-hold-txt").textContent = typeof holdInfo.target === "number"
+    ? ` target ${holdInfo.target}° · at ${holdInfo.tilt}° — averaging, keep clear`
+    : ` ${holdInfo.target} — keep holding, click DROPPED / SLIPPED only if it happens`;
+  $("t-hold-left").textContent = `${Math.max(0, left).toFixed(1)} s`;
+  $("t-hold-bar").style.width = `${Math.min(100, Math.max(0, 100 * (1 - left / holdInfo.s)))}%`;
+}
+setInterval(tickHold, 100);
+
+// ---------------------------------------------------------------- manipulator: grasp trials
+const OBJECTS = [   // 3D-printed shape set (Shapes.3mf): name, size mm
+  ["Dodecahedron", "49 x 48 x 40"], ["Polyhedron (icosahedron-like)", "43 x 49 x 40"], ["Rectangular block", "30 x 50 x 30"],
+  ["Cube", "30 x 30 x 30"], ["Tetrahedron", "42 x 49 x 40"], ["Cone", "D30 x 40"], ["Cone B (short)", "D30 x 20"],
+  ["Sphere", "D30"], ["Octahedron", "28 x 33 x 23"], ["Cylinder", "D26 x 30"], ["Polygon plate 1", "41 x 42 x 10"],
+  ["Polygon plate 2", "45 x 28 x 10"], ["Polygon plate 3", "41 x 40 x 10"], ["Polygon plate 4", "43 x 37 x 10"],
+  ["Triangle plate", "35 x 40 x 10"], ["Half cube", "30 x 30 x 15"], ["Custom...", ""]];
+(function initObjects() {
+  const sel = $("gt-obj");
+  sel.innerHTML = OBJECTS.map(([n], k) => `<option value="${k}">${n}</option>`).join("");
+  const sync = () => { const [n, sz] = OBJECTS[Number(sel.value)]; $("gt-size").value = sz;
+    $("gt-name").disabled = n !== "Custom..."; };
+  sel.onchange = sync; sync();
+})();
+$("b-gt").onclick = async () => {
+  const [n] = OBJECTS[Number($("gt-obj").value)];
+  const name = (n === "Custom..." ? $("gt-name").value : n).trim().replace(/"/g, "'");
+  if (!name) return toast("enter the custom object name", true);
+  const q = (x) => String(x).replace(/"/g, "'");
+  const ov = `object: "${name}"\nobject_size_mm: "${q($("gt-size").value)}"\nobject_mass_g: ${Number($("gt-mass").value) || 0}\n` +
+             `trials: ${Number($("gt-trials").value) || 5}\nhold_s: ${Number($("gt-hold").value) || 10}\nlabel: "${q($("gt-label").value)}"`;
+  const j = await api("test/start", { protocol: "grasp_trials", overrides: ov, notes: `${name} ${$("gt-label").value}` });
+  if (j.ok) { toast(`grasp trials started: ${name}`); $("gt-table").tBodies[0].innerHTML = ""; }
+};
+let gtKey = "";
+function renderGrasp(t) {
+  if (!t || t.protocol !== "grasp_trials") return;
+  $("gt-dir").textContent = t.session_dir ? "· " + t.session_dir.split("/").slice(-1)[0] : "";
+  const rows = (t.live && t.live.table) || [];
+  const key = JSON.stringify(rows);
+  if (key === gtKey) return;
+  gtKey = key;
+  const done = rows.filter((r) => r.outcome !== "skipped"), ok = done.filter((r) => r.success).length;
+  $("gt-tally").textContent = done.length ? `${ok}/${done.length} successful` : "";
+  const f = (x, d = 1) => (x === null || x === undefined ? "–" : Number(x).toFixed(d));
+  $("gt-table").tBodies[0].innerHTML = rows.map((r) => `<tr><td>${r.trial}</td>
+    <td class="${r.success ? "" : "err"}">${r.outcome}</td><td>${f(r.held_s)}</td><td>${f(r.time_to_grasp_s)}</td>
+    <td>${r.slipped ? "yes" : ""}</td><td>${f(r.droop_during_hold_deg, 2)}</td><td>${f(r.supply_v)}</td></tr>`).join("");
+}

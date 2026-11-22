@@ -91,9 +91,8 @@ class SensorBridge(Node):
         now = time.monotonic()
         self.skip = {p: t for p, t in self.skip.items() if now - t < 30.0}
         port = self.port_param or find_sensor_port(set(self.skip))
-        if not port and self.skip:                 # every board was skipped: start over
-            self.skip.clear()
-            port = find_sensor_port()
+        # every board was skipped (none sent IMU data): wait for their 30 s skip to expire instead of
+        # re-grabbing them now -- re-grabbing the flex board every few s knocked flex_bridge off it
         if not port:
             self.get_logger().warn("no sensor board found — retrying", throttle_duration_sec=10.0)
             return
@@ -119,7 +118,7 @@ class SensorBridge(Node):
         elif not b.link_ok or now - max(self.last_sample, self.t_connect) > 2.0:   # no IMU samples
             if b.link_ok and not self.port_param:   # port open but no IMU lines: probably the flex board
                 self.skip[os.path.realpath(b.port)] = now
-                self.notice(f"no IMU data on {b.port} (flex-only board?) — trying the next board")
+                self.notice(f"no IMU data on {b.port} (flex board, or IMU cable loose?) — trying the next board")
             else:
                 self.notice(f"IMU board lost ({b.link_error or 'no data'}) — reconnecting")
             b.close()

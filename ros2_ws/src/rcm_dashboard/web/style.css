@@ -117,7 +117,7 @@ nav.tabs { display: flex; gap: 4px; max-width: 760px; margin: 10px auto 0; paddi
 .form input, .form select { width: 100%; }
 
 /* flex sensors */
-.flex-row { display: grid; grid-template-columns: 130px 70px 1fr; gap: 10px; align-items: center; margin: 6px 0; }
+.flex-row { display: grid; grid-template-columns: 165px 60px 1fr; gap: 10px; align-items: center; margin: 6px 0; }
 .flex-row .nm { font-size: 13px; } .flex-row .nm small { display: block; color: var(--muted); font-size: 11px; }
 .flex-row .ang { font-size: 22px; font-weight: 700; font-variant-numeric: tabular-nums; text-align: right; }
 .flex-row .ang.est { color: var(--warn); }
@@ -125,3 +125,20 @@ nav.tabs { display: flex; gap: 4px; max-width: 760px; margin: 10px auto 0; paddi
 .flex-bar i { position: absolute; left: 0; top: 0; bottom: 0; background: var(--accent); border-radius: 8px; transition: width .08s linear; }
 .flex-bar b { position: absolute; top: 0; bottom: 0; width: 1px; background: #4a5260; }
 @media (max-width: 480px) { .flex-row { grid-template-columns: 100px 60px 1fr; } }
+
+/* calibrate: per-tendon pull / release */
+.cal { border-top: 1px solid var(--line); margin-top: 8px; padding-top: 6px; }
+.cal-row { display: grid; grid-template-columns: 34px 1fr auto auto; gap: 8px; align-items: center; margin: 5px 0; }
+.cal-row b { font-size: 14px; } .cal-row .v { font-variant-numeric: tabular-nums; font-size: 12px; color: var(--muted); }
+.cal-row .v.off { color: var(--warn); }
+.cal-row .btn { min-width: 74px; }
+
+/* final tests: hold indicator */
+.hold { border: 2px solid var(--warn); border-radius: 8px; padding: 8px 10px; margin: 8px 0; background: rgba(240,160,32,.10);
+        animation: holdpulse 1.2s ease-in-out infinite; }
+.hold b { color: var(--warn); font-size: 16px; letter-spacing: 1px; }
+.hold #t-hold-left { margin-left: auto; font-size: 22px; font-weight: 700; color: var(--warn); }
+.hold-bar { height: 8px; background: #0c0f13; border-radius: 4px; overflow: hidden; margin-top: 6px; }
+.hold-bar i { display: block; height: 100%; width: 0; background: var(--warn); }
+@keyframes holdpulse { 50% { box-shadow: 0 0 0 4px rgba(240,160,32,.25); } }
+@media (prefers-reduced-motion: reduce) { .hold { animation: none; } }

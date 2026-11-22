@@ -1,0 +1,23 @@
+protocol: final_bend
+description: >
+  Project bend-accuracy test (Final Tests tab). For each trial and target: home -> zero IMU ->
+  pull to the target (coarse, then fine steps) -> hold and average -> release home in steps ->
+  residual. results.csv has one row per bend; summary.csv has mean/sd per target.
+params:
+  targets: [30, 60, 75, 90]   # deg, corrected IMU tilt
+  trials: 3                   # repeats of the whole target list
+  tendon: 3
+  release_ratio: 0.5
+  step_counts: 15             # coarse step
+  fine_step_counts: 5         # within fine_within_deg of the target
+  fine_within_deg: 6.0
+  tol_deg: 0.5                # stop at target - tol
+  hold_s: 5.0                 # averaged hold at the target
+  imu_offset_deg: 0.0         # corrected = imu_scale * raw + imu_offset_deg
+  imu_scale: 1.0
+  max_travel_counts: 1990
+  load_limit: 700
+  speed: 150
+  sample_s: 0.3
+  label: ""                   # condition tag written to every row (e.g. "no payload")
+  require_imu: true

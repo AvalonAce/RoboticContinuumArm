@@ -1,0 +1,10 @@
+updated: '2026-11-21 15:12:34'
+r_fixed_ohm: 10000.0
+vcc_v: 3.3
+channels:
+  0:
+    r_flat: 15217.8
+  1:
+    r_flat: 15328.5
+  2:
+    r_flat: 25215.8

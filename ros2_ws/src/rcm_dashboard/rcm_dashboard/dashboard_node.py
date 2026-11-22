@@ -123,10 +123,13 @@ class Dashboard(Node):
 
     def on_flex(self, m: FlexState):
         r = lambda x, d=1: None if x != x else round(x, d)  # noqa: E731
+        fr, to = list(m.from_cm), list(m.to_cm)
         self.flex = {"t": time.time(), "state": m.state, "message": m.message, "rate": round(m.rate_hz),
-                     "sensors": [{"name": n, "v": r(v, 3), "r_k": r(rr / 1000.0, 2), "angle": r(a), "cal": bool(c)}
-                                 for n, v, rr, a, c in zip(m.names, m.volts, m.resistance_ohm, m.angle_deg,
-                                                           m.calibrated)]}
+                     "total": r(m.total_deg), "covered_cm": r(m.covered_cm), "length_cm": r(m.length_cm),
+                     "sensors": [{"name": n, "v": r(v, 3), "r_k": r(rr / 1000.0, 2), "angle": r(a), "cal": bool(c),
+                                  "from": r(fr[k]) if k < len(fr) else None, "to": r(to[k]) if k < len(to) else None}
+                                 for k, (n, v, rr, a, c) in enumerate(zip(m.names, m.volts, m.resistance_ohm,
+                                                                          m.angle_deg, m.calibrated))]}
 
     def on_notice(self, m: String):
         self.notice_n += 1
@@ -145,7 +148,7 @@ class Dashboard(Node):
     # ---------------- HTTP -> ROS ----------------
     def call(self, name: str, req, timeout: float = 3.0):
         cli = self.cli[name]
-        if not cli.service_is_ready() and not cli.wait_for_service(timeout_sec=1.0):
+        if not cli.service_is_ready() and not cli.wait_for_service(timeout_sec=5.0):
             return {"ok": False, "message": f"service for '{name}' not available (node running?)"}
         fut = cli.call_async(req)
         done = threading.Event()

@@ -26,6 +26,8 @@
 <nav class="tabs">
   <button class="tab active" data-tab="control">Control</button>
   <button class="tab" data-tab="tests">Tests <span id="tab-dot" class="tab-dot hidden"></span></button>
+  <button class="tab" data-tab="final">Final Tests</button>
+  <button class="tab" data-tab="manip">Manipulator</button>
 </nav>
 
 <main id="main">
@@ -34,6 +36,14 @@
     <div class="row btns">
       <button id="b-home" class="btn primary" title="Current motor positions become home (re-centres each servo)">Save home</button>
       <button id="b-rest" class="btn" title="Move slowly back to the saved home and hold">Go to home</button>
+      <button id="b-cal" class="btn" title="Pull / release each tendon in small steps to straighten the arm by hand">Calibrate ▾</button>
+    </div>
+    <div id="cal-panel" class="cal hidden">
+      <div class="row small muted">Straighten the arm (measure by hand), then <b>Save home</b>.
+        <label class="chk" style="margin-left:auto">step
+          <select id="cal-step"><option>5</option><option selected>10</option><option>25</option><option>50</option></select> counts</label>
+      </div>
+      <div id="cal-rows"></div>
     </div>
     <p class="small muted">Tension the tendons (rcm spool / jog), arm straight → <b>Save home</b>. That pose is the zero for
       bends and tests, and where <b>Go to home</b> returns. Each servo's encoder is re-centred there (reads 2048) so every
@@ -86,13 +96,18 @@
   </section>
 
 
-  <section class="card hidden" data-tab="tests" id="test-card">
+  <section class="card hidden" data-tab="tests final manip" id="test-card">
     <h2>Running test</h2>
     <div class="row"><span id="t-state" class="chip">idle</span><span id="t-elapsed" class="small muted"></span>
       <button id="b-abort" class="btn warn" style="margin-left:auto" title="Stops the test; arm holds position">Abort</button></div>
     <div id="prompt" class="prompt hidden">
       <div id="prompt-text"></div>
-      <div class="row"><input id="prompt-in" type="text"><button id="b-answer" class="btn primary">Continue ⏎</button></div>
+      <div class="row" id="prompt-row"><input id="prompt-in" type="text"><button id="b-answer" class="btn primary">Continue ⏎</button></div>
+      <div class="row btns hidden" id="prompt-choices"></div>
+    </div>
+    <div id="t-hold" class="hold hidden">
+      <div class="row"><b>HOLDING</b><span id="t-hold-txt"></span><span id="t-hold-left" class="mono"></span></div>
+      <div class="hold-bar"><i id="t-hold-bar"></i></div>
     </div>
     <div id="t-live" class="hidden">
       <h3 id="t-live-title"></h3>
@@ -100,6 +115,50 @@
       <canvas id="t-live-c" height="220"></canvas>
     </div>
     <pre id="t-log"></pre>
+  </section>
+
+  <section class="card hidden" data-tab="manip">
+    <h2>Grasp trials <small>success = grasped and held for the hold time · rigid base</small></h2>
+    <div class="form">
+      <label>Object <select id="gt-obj"></select></label>
+      <label>Name (custom) <input id="gt-name" type="text" placeholder="only for Custom"></label>
+      <label>Size (mm) <input id="gt-size" type="text"></label>
+      <label>Mass (g, weighed) <input id="gt-mass" type="number" min="0" step="0.1" placeholder="weigh it"></label>
+      <label>Trials <input id="gt-trials" type="number" value="5" min="1" max="50" step="1"></label>
+      <label>Hold (s) <input id="gt-hold" type="number" value="10" min="1" max="120" step="1"></label>
+      <label>Label <input id="gt-label" type="text" placeholder="e.g. fin-ray v1, rigid base"></label>
+    </div>
+    <div class="row btns"><button id="b-gt" class="btn primary">Start grasp trials</button>
+      <span class="small muted">The gripper/wrist are run by the team's control code. This panel steps you through each trial,
+        times the hold and logs everything (IMU, flex, servos) to data/&lt;time&gt;_grasp_trials/.</span></div>
+    <h3>Trials <small id="gt-tally"></small> <small id="gt-dir"></small></h3>
+    <div style="overflow-x:auto"><table id="gt-table"><thead><tr><th>#</th><th>outcome</th><th>held (s)</th><th>time to grasp (s)</th>
+      <th>slip</th><th>droop (°)</th><th>supply (V)</th></tr></thead><tbody></tbody></table></div>
+  </section>
+
+  <section class="card hidden" data-tab="manip">
+    <h2>End effector <small>Fin-Ray gripper + wrist roll</small></h2>
+    <p class="small muted">Gripper and wrist control will come from the team's motor code; it will be added here
+      (open/close, wrist angle, live grip load) once it is integrated.</p>
+  </section>
+
+  <section class="card hidden" data-tab="final">
+    <h2>Bend accuracy <small>project data: every bend logged + results.csv / summary.csv</small></h2>
+    <div class="form">
+      <label>Targets (°) <input id="fb-targets" type="text" value="30, 60, 75, 90"></label>
+      <label>Trials <input id="fb-trials" type="number" value="3" min="1" max="20" step="1"></label>
+      <label>Pull tendon <select id="fb-tendon"><option>1</option><option>2</option><option selected>3</option></select></label>
+      <label>Hold (s) <input id="fb-hold" type="number" value="5" min="1" max="60" step="1"></label>
+      <label>IMU offset (°) <input id="fb-off" type="number" value="0" step="0.1"></label>
+      <label>IMU scale <input id="fb-scale" type="number" value="1" min="0.8" max="1.2" step="0.005"></label>
+      <label>Release ratio <input id="fb-ratio" type="number" value="0.5" min="0" max="1.5" step="0.05"></label>
+      <label>Label <input id="fb-label" type="text" placeholder="e.g. no payload"></label>
+    </div>
+    <div class="row btns"><button id="b-fb" class="btn primary">Start final test</button>
+      <span class="small muted">corrected tilt = scale × IMU + offset (raw IMU is logged too). Save home first.</span></div>
+    <h3>Results <small id="fb-dir"></small></h3>
+    <div style="overflow-x:auto"><table id="fb-table"><thead><tr><th>#</th><th>trial</th><th>target</th><th>reached</th>
+      <th>error</th><th>counts</th><th>mm</th><th>flex</th><th>residual</th><th>stop</th></tr></thead><tbody></tbody></table></div>
   </section>
 
   <section class="card hidden" data-tab="tests">
